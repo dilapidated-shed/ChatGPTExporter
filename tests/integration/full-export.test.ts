@@ -193,6 +193,7 @@ function currentPageFor(id: string): JsonValue {
     detail.mapping["assistant-1"]!.message!,
   ] as unknown as JsonValue[];
   const currentNode = (messages.at(-1) as Record<string, JsonValue>).id;
+  if (typeof currentNode !== "string") throw new Error("synthetic current page is missing a message id");
   return {
     conversation_id: id,
     title: detail.title,
