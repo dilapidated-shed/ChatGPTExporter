@@ -1,140 +1,32 @@
 # ChatGPT Web Probe
 
-A deliberately small Android research instrument for observing the private `chatgpt.com` web contract before designing the exporter.
+This branch is an observation instrument, not the exporter.
 
-This is **not** the exporter and should not acquire exporter architecture.
+The app is deliberately small: a framework `android.app.NativeActivity` plus
+one NDK-built C/JNI library. It contains no Java/Kotlin application source and
+no `classes.dex`. The native entry point creates an Android WebView through JNI,
+enables Web Contents debugging, and opens `https://chatgpt.com/`.
 
-## Design
+## Ownership
 
-Chrome Stable on the C67 did not expose `chrome_devtools_remote` even with Android debugging enabled. Android WebView is Chromium too, but here we control the embedding app and explicitly enable Web Contents debugging.
+- Cat Food owns the A1-primary / C67-paired target facts.
+- android-NDK owns generic NativeActivity APK construction.
+- ai-ci owns build-toolchain and finished-APK producer/signing gates.
+- Kitchen owns scripts served to people and scripts consumed by automation.
+- Flexible Pipes owns the repeatable paired producer workflow.
+- This repository owns only probe source, manifest and research capture scripts.
 
-The probe only:
+Do not add another Android build system here.
 
-1. hosts `https://chatgpt.com/` in a persistent WebView;
-2. enables JavaScript, DOM storage and cookies so the user can log in;
-3. calls `WebView.setWebContentsDebuggingEnabled(true)`;
-4. leaves observation to Chrome DevTools Protocol through ADB.
+## Acceptance
 
-There is deliberately no JavaScript-to-native bridge, conversation parser, normalization layer, or exporter storage model.
-
-## Build
-
-The repository workflow `.github/workflows/probe-apk.yml` builds a debug APK on the `probe` branch.
-
-The build deliberately does not use Gradle or Maven. The probe depends only on Android framework APIs, so `probe/build.sh` invokes the SDK tools directly:
-
-```text
-javac → aapt2 → d8 → zipalign → apksigner
-```
-
-With Android SDK 34 and Build Tools 34.0.0 installed:
-
-```sh
-./probe/build.sh
-```
-
-APK:
-
-```text
-probe/build/chatgpt-web-probe-debug.apk
-```
-
-The app is Java/WebView only, so one APK runs on both A1 and C67; there is no native ABI split.
-
-## First acceptance test
-
-Install and open **ChatGPT Web Probe**. The top bar shows the installed WebView package/version.
-
-Then:
+After the Cat Food/Flexible Pipes artifact is installed and the probe is running:
 
 ```sh
 rish -c 'grep -Ei "webview.*devtools_remote" /proc/net/unix'
 ```
 
-We want an abstract socket resembling:
+A socket resembling `@webview_devtools_remote_<pid>` is the first required
+runtime observation. Then use `scripts/connect.sh` and `scripts/capture.py`.
 
-```text
-@webview_devtools_remote_12345
-```
-
-If no WebView DevTools socket appears, stop. The probe has failed its reason for existing.
-
-## Forward DevTools into Termux
-
-With Wireless Debugging/ADB connected:
-
-```sh
-cd probe/scripts
-./connect.sh
-```
-
-The script discovers the WebView socket through Rish and asks ADB to forward it to local port 9222. It then prints `/json/list`.
-
-Manual equivalent:
-
-```sh
-adb forward tcp:9222 localabstract:webview_devtools_remote_12345
-curl http://127.0.0.1:9222/json/list
-```
-
-## Capture raw API evidence
-
-After `./connect.sh` has forwarded the WebView DevTools socket:
-
-```sh
-python capture.py GET '/api/auth/session'
-
-python capture.py GET \
-  '/backend-api/conversations?offset=0&limit=100&order=updated&hide_snorlax=false'
-
-python capture.py GET \
-  '/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=0&limit=20&owned_only=false'
-
-python capture.py GET \
-  '/backend-api/conversation/CONVERSATION_ID'
-
-python capture.py GET \
-  '/backend-api/conversations/CONVERSATION_ID?include_has_versions=true&num_turns=10'
-```
-
-For a workspace-specific request, pass the account/workspace id explicitly:
-
-```sh
-python capture.py --account-id ACCOUNT_ID GET '/backend-api/conversation/CONVERSATION_ID'
-```
-
-The script runs `fetch()` inside the logged-in `chatgpt.com` page. For backend requests it reads `/api/auth/session`, keeps the access token only in page memory, and sends the same bearer/header family already observed in the reference exporter. The token is not written to disk.
-
-Each request creates:
-
-```text
-captures/<timestamp>-<request>/
-  metadata.json
-  body.txt
-  request-body.txt   # only for requests with a body
-```
-
-The body remains separate from the metadata. Metadata records the exact path, time, status, response headers, user agent, byte count and SHA-256.
-
-## Research order
-
-Do not spider the whole account first. Collect deliberately chosen specimens:
-
-1. session response;
-2. active conversation-list page;
-3. archived conversation-list page;
-4. project list and an actual project cursor if pagination occurs;
-5. one short conversation through both singular and plural read paths;
-6. one very long conversation through the plural path and every older-page cursor;
-7. a conversation with regenerated or edited branches;
-8. a conversation with files/images;
-9. a shared conversation;
-10. memory/settings/custom-instruction endpoints already cataloged under `docs/chatgpt-web-api/`.
-
-Record failures too. A 404, 403, 429, challenge, or structurally different response is evidence.
-
-## Research rule
-
-The fixture corpus is authoritative evidence. Types come later.
-
-Do not turn one observed JSON shape into a universal invariant. Cursors are opaque provider data, and conversation-read capabilities may vary by account/workspace cohort.
+Raw fixtures are evidence. Types come later.
