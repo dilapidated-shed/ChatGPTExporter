@@ -71,6 +71,45 @@ adb forward tcp:9222 localabstract:webview_devtools_remote_12345
 curl http://127.0.0.1:9222/json/list
 ```
 
+## Capture raw API evidence
+
+After `./connect.sh` has forwarded the WebView DevTools socket:
+
+```sh
+python capture.py GET '/api/auth/session'
+
+python capture.py GET \
+  '/backend-api/conversations?offset=0&limit=100&order=updated&hide_snorlax=false'
+
+python capture.py GET \
+  '/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=0&limit=20&owned_only=false'
+
+python capture.py GET \
+  '/backend-api/conversation/CONVERSATION_ID'
+
+python capture.py GET \
+  '/backend-api/conversations/CONVERSATION_ID?include_has_versions=true&num_turns=10'
+```
+
+For a workspace-specific request, pass the account/workspace id explicitly:
+
+```sh
+python capture.py --account-id ACCOUNT_ID GET '/backend-api/conversation/CONVERSATION_ID'
+```
+
+The script runs `fetch()` inside the logged-in `chatgpt.com` page. For backend requests it reads `/api/auth/session`, keeps the access token only in page memory, and sends the same bearer/header family already observed in the reference exporter. The token is not written to disk.
+
+Each request creates:
+
+```text
+captures/<timestamp>-<request>/
+  metadata.json
+  body.txt
+  request-body.txt   # only for requests with a body
+```
+
+The body remains separate from the metadata. Metadata records the exact path, time, status, response headers, user agent, byte count and SHA-256.
+
 ## Research order
 
 Do not spider the whole account first. Collect deliberately chosen specimens:
