@@ -114,7 +114,7 @@ export class ChatGptDetailFetcher {
     for (const conversation of group) {
       const candidate = candidateById.get(conversation.conversationId);
       if (!candidate || candidate.issue || !candidate.parsed) {
-        conversations.push(await this.fetchSingle(conversation, candidate?.issue ?? "batch_missing"));
+        conversations.push(await this.fetchCurrent(conversation, candidate?.issue ?? "batch_missing"));
       } else {
         conversations.push({
           inventory: conversation,
