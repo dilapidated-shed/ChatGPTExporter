@@ -282,6 +282,15 @@ def main():
 
     record = json.loads(value)
     response_body = record.pop("body")
+    if args.path == "/api/auth/session":
+        try:
+            session_for_disk = json.loads(response_body)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("session response was not JSON; refusing to write it") from error
+        if isinstance(session_for_disk, dict) and isinstance(session_for_disk.get("accessToken"), str):
+            session_for_disk["accessToken"] = "<redacted>"
+            record["redactions"] = ["accessToken"]
+        response_body = json.dumps(session_for_disk, separators=(",", ":"))
     body_bytes = response_body.encode("utf-8")
     record["bodyUtf8Bytes"] = len(body_bytes)
     record["bodySha256"] = hashlib.sha256(body_bytes).hexdigest()
