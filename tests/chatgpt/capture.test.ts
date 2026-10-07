@@ -68,21 +68,24 @@ describe("ChatGPT batch-first detail retrieval", () => {
     expect(transport.request).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back when a compact placeholder is not a detached root", async () => {
+  it("falls back through the plural current endpoint when a compact placeholder is not a detached root", async () => {
     const compactNonRoot = conversationDetail() as unknown as { mapping: Record<string, Record<string, JsonValue>> };
     delete compactNonRoot.mapping["user-1"]!.parent;
     delete compactNonRoot.mapping["user-1"]!.message;
     const transport = transportFor((operation) => {
       if (operation.operation === "conversation_batch") return [compactNonRoot as unknown as JsonValue];
-      if (operation.operation === "conversation_detail") return conversationDetail() as unknown as JsonValue;
+      if (operation.operation === "conversation_current") return onePageCurrent(operation.parameters.conversationId);
       throw new Error(`unexpected ${operation.operation}`);
     });
     const result = await new ChatGptDetailFetcher(transport, workspace).fetchAll([inventoryItem()]);
-    expect(result.conversations[0]).toMatchObject({ source: "single", fallbackReason: "batch_graph_suspicious" });
-    expect(transport.request).toHaveBeenCalledTimes(2);
+    expect(result.conversations[0]).toMatchObject({ source: "current", fallbackReason: "batch_graph_suspicious" });
+    expect(transport.request.mock.calls.map(([operation]) => operation.operation)).toEqual([
+      "conversation_batch",
+      "conversation_current",
+    ]);
   });
 
-  it("falls back individually for omitted, malformed, duplicate, and graph-suspicious batch records", async () => {
+  it("falls back individually through the plural current endpoint for omitted, malformed, duplicate, and graph-suspicious batch records", async () => {
     const items = ["conversation-1", "conversation-2", "conversation-3", "conversation-4"].map(inventoryItem);
     const transport = transportFor((operation) => {
       if (operation.operation === "conversation_batch") {
@@ -91,18 +94,24 @@ describe("ChatGPT batch-first detail retrieval", () => {
         const suspicious = conversationDetail({ id: "conversation-4", current_node: "missing-node" }) as unknown as JsonValue;
         return [malformed, duplicate, duplicate, suspicious];
       }
-      if (operation.operation === "conversation_detail") return conversationDetail({ id: operation.parameters.conversationId }) as unknown as JsonValue;
+      if (operation.operation === "conversation_current") return onePageCurrent(operation.parameters.conversationId);
       throw new Error(`unexpected ${operation.operation}`);
     });
     const result = await new ChatGptDetailFetcher(transport, workspace).fetchAll(items);
-    expect(result.conversations.map((item) => item.source)).toEqual(["single", "single", "single", "single"]);
+    expect(result.conversations.map((item) => item.source)).toEqual(["current", "current", "current", "current"]);
     expect(result.conversations.map((item) => item.fallbackReason)).toEqual([
       "batch_missing",
       "batch_invalid",
       "batch_duplicate",
       "batch_graph_suspicious",
     ]);
-    expect(transport.request).toHaveBeenCalledTimes(5);
+    expect(transport.request.mock.calls.map(([operation]) => operation.operation)).toEqual([
+      "conversation_batch",
+      "conversation_current",
+      "conversation_current",
+      "conversation_current",
+      "conversation_current",
+    ]);
   });
 
   it("uses the share adapter for share-only inventory records", async () => {
@@ -116,13 +125,19 @@ describe("ChatGPT batch-first detail retrieval", () => {
     expect(result.conversations[0]?.source).toBe("shared");
   });
 
-  it("refuses an invalid single-detail fallback instead of accepting partial capture", async () => {
+  it("refuses an invalid legacy single-detail fallback instead of accepting partial capture", async () => {
     const transport = transportFor((operation) => {
       if (operation.operation === "conversation_batch") return [];
+      if (operation.operation === "conversation_current") throw httpFailure(404);
       if (operation.operation === "conversation_detail") return conversationDetail({ current_node: "missing" }) as unknown as JsonValue;
       throw new Error(`unexpected ${operation.operation}`);
     });
     await expect(new ChatGptDetailFetcher(transport, workspace).fetchAll([inventoryItem()])).rejects.toBeInstanceOf(DetailCaptureError);
+    expect(transport.request.mock.calls.map(([operation]) => operation.operation)).toEqual([
+      "conversation_batch",
+      "conversation_current",
+      "conversation_detail",
+    ]);
   });
 
   it("captures a complete three-page current branch and reconciles stable overlap messages", async () => {
@@ -325,6 +340,18 @@ describe("ChatGPT batch-first detail retrieval", () => {
     expect(checkpoints).toEqual([["conversation-1"]]);
   });
 });
+
+function onePageCurrent(conversationId: string): JsonValue {
+  const userId = `${conversationId}-user`;
+  const assistantId = `${conversationId}-assistant`;
+  return paginatedPage({
+    conversationId,
+    messages: [paginatedMessage(userId, "user"), paginatedMessage(assistantId, "assistant")],
+    hasPreviousPage: false,
+    startCursor: null,
+    currentNode: assistantId,
+  });
+}
 
 function paginatedMessage(id: string, role: "user" | "assistant"): JsonValue {
   return {
