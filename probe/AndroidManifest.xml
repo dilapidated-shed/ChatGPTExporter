@@ -2,17 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.isomorphisms.chatgptprobe">
     <uses-permission android:name="android.permission.INTERNET" />
-
     <application
         android:allowBackup="false"
+        android:extractNativeLibs="true"
+        android:hasCode="false"
+        android:hardwareAccelerated="true"
         android:label="ChatGPT Web Probe"
-        android:supportsRtl="true"
         android:usesCleartextTraffic="false"
-        android:hardwareAccelerated="true">
+        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
         <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:screenOrientation="unspecified">
+            android:name="android.app.NativeActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true">
+            <meta-data android:name="android.app.lib_name" android:value="chatgptprobe" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
