@@ -54,8 +54,10 @@ describe("deterministic full-scope export integration", () => {
       partialProjectAssetCount: 0,
       accountArtifactStatus: "complete",
     });
-    expect(transport.request.mock.calls.filter(([operation]) => operation.operation === "conversation_detail"))
+    expect(transport.request.mock.calls.filter(([operation]) => operation.operation === "conversation_current"))
       .toHaveLength(1);
+    expect(transport.request.mock.calls.filter(([operation]) => operation.operation === "conversation_detail"))
+      .toHaveLength(0);
     const audit = await auditArchive({ filesystem, extensionVersion: "0.0.0-test", now: () => new Date("2026-08-01T00:00:02.000Z") });
     expect(audit).toMatchObject({
       terminalState: "complete",
@@ -137,8 +139,10 @@ function fullTransport(): ChatGptTransport & { request: ReturnType<typeof vi.fn>
       body = operation.parameters.conversationIds
         .filter((id) => id !== "conversation-2")
         .map((id) => detailFor(id) as unknown as JsonValue);
+    } else if (operation.operation === "conversation_current") {
+      body = currentPageFor(operation.parameters.conversationId);
     } else if (operation.operation === "conversation_detail") {
-      body = detailFor(operation.parameters.conversationId) as unknown as JsonValue;
+      throw new Error("legacy singular detail must not be used when plural current capture succeeds");
     } else if (operation.operation === "shared_detail") {
       body = detailFor("shared-provider-detail") as unknown as JsonValue;
     } else if (operation.operation === "account_artifact") {
@@ -180,6 +184,25 @@ function workspaceTransport(): ChatGptTransport & { request: ReturnType<typeof v
 
 function listing(id: string): JsonValue {
   return { id, title: `Synthetic ${id}`, create_time: 1, update_time: 2 };
+}
+
+function currentPageFor(id: string): JsonValue {
+  const detail = detailFor(id);
+  const messages = [
+    detail.mapping["user-1"]!.message!,
+    detail.mapping["assistant-1"]!.message!,
+  ] as unknown as JsonValue[];
+  const currentNode = (messages.at(-1) as Record<string, JsonValue>).id;
+  if (typeof currentNode !== "string") throw new Error("synthetic current page is missing a message id");
+  return {
+    conversation_id: id,
+    title: detail.title,
+    create_time: detail.create_time,
+    update_time: detail.update_time,
+    current_node: currentNode,
+    messages,
+    page_info: { has_previous_page: false, start_cursor: null },
+  };
 }
 
 function detailFor(id: string) {
