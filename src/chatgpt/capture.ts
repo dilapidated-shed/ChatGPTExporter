@@ -253,9 +253,9 @@ export class ChatGptDetailFetcher {
     const raw: JsonValue = {
       ...metadata,
       conversation_id: conversation.conversationId,
-      title: Object.hasOwn(metadata, "title") ? metadata.title : conversation.title,
-      create_time: Object.hasOwn(metadata, "create_time") ? metadata.create_time : conversation.createTime,
-      update_time: Object.hasOwn(metadata, "update_time") ? metadata.update_time : conversation.updateTime,
+      title: metadata.title === undefined ? conversation.title : metadata.title,
+      create_time: metadata.create_time === undefined ? conversation.createTime : metadata.create_time,
+      update_time: metadata.update_time === undefined ? conversation.updateTime : metadata.update_time,
       current_node: resolvedCurrentNode,
       mapping,
       __pagination_evidence: {
