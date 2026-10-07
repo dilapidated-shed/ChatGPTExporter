@@ -21,16 +21,22 @@ There is deliberately no JavaScript-to-native bridge, conversation parser, norma
 
 The repository workflow `.github/workflows/probe-apk.yml` builds a debug APK on the `probe` branch.
 
-With Android SDK 34 and Gradle available:
+The build deliberately does not use Gradle or Maven. The probe depends only on Android framework APIs, so `probe/build.sh` invokes the SDK tools directly:
+
+```text
+javac → aapt2 → d8 → zipalign → apksigner
+```
+
+With Android SDK 34 and Build Tools 34.0.0 installed:
 
 ```sh
-gradle -p probe assembleDebug
+./probe/build.sh
 ```
 
 APK:
 
 ```text
-probe/app/build/outputs/apk/debug/app-debug.apk
+probe/build/chatgpt-web-probe-debug.apk
 ```
 
 The app is Java/WebView only, so one APK runs on both A1 and C67; there is no native ABI split.
