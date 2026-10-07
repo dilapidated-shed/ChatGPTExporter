@@ -210,8 +210,9 @@ describe("journaled ChatGPT capture engine", () => {
     raw.__pagination_evidence.page_count = raw.__pagination_evidence.pages.length;
 
     const truncatedRawText = prettyJson(raw as unknown as JsonValue);
-    await filesystem.writeTextAtomic(rawMarker.detailPath, truncatedRawText);
     rawMarker.detailHash = await sha256Hex(truncatedRawText);
+    rawMarker.detailPath = `conversations/conversation-1/source/detail-${rawMarker.detailHash}.json`;
+    await filesystem.writeTextAtomic(rawMarker.detailPath, truncatedRawText);
     const rawMarkerText = prettyJson(rawMarker as unknown as JsonValue);
     await filesystem.writeTextAtomic(rawMarkerPath, rawMarkerText);
 
