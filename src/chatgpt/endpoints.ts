@@ -9,6 +9,8 @@ export type ChatGptOperation =
   | "shared_page"
   | "shared_detail"
   | "conversation_batch"
+  | "conversation_current"
+  | "conversation_messages"
   | "conversation_detail"
   | "account_artifact"
   | "asset_open"
@@ -24,6 +26,8 @@ export type ChatGptOperationParameters =
   | { operation: "shared_page"; parameters: { offset: number; limit: number } }
   | { operation: "shared_detail"; parameters: { shareId: string } }
   | { operation: "conversation_batch"; parameters: { conversationIds: string[] } }
+  | { operation: "conversation_current"; parameters: { conversationId: string; numTurns: number } }
+  | { operation: "conversation_messages"; parameters: { conversationId: string; before: string; numTurns: number } }
   | { operation: "conversation_detail"; parameters: { conversationId: string } }
   | { operation: "account_artifact"; parameters: { kind: "memories" | "custom_instructions" | "settings" | "beta_features" } }
   | { operation: "asset_open"; parameters: { fileId: string; conversationId: string | null; projectId: string | null } }
@@ -40,9 +44,10 @@ export interface ResolvedEndpoint {
 }
 
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,256}$/;
-const CURSOR = /^[A-Za-z0-9._~-]{1,512}$/;
+const MAX_CURSOR_LENGTH = 2_048;
 const MAX_PAGE_SIZE = 100;
 const MAX_BATCH_SIZE = 10;
+const MAX_TURNS = 100;
 
 export function resolveEndpoint(request: ChatGptOperationParameters): ResolvedEndpoint {
   switch (request.operation) {
@@ -84,6 +89,25 @@ export function resolveEndpoint(request: ChatGptOperationParameters): ResolvedEn
     case "shared_detail": {
       const shareId = assertIdentifier(request.parameters.shareId, "shareId");
       return endpoint("GET", `/backend-api/share/${shareId}`, true, 100_000_000, request.operation);
+    }
+    case "conversation_current": {
+      const conversationId = assertIdentifier(request.parameters.conversationId, "conversationId");
+      assertNumTurns(request.parameters.numTurns);
+      const query = new URLSearchParams({
+        include_has_versions: "true",
+        num_turns: String(request.parameters.numTurns),
+      });
+      return endpoint("GET", `/backend-api/conversations/${conversationId}?${query}`, true, 100_000_000, request.operation);
+    }
+    case "conversation_messages": {
+      const conversationId = assertIdentifier(request.parameters.conversationId, "conversationId");
+      assertNumTurns(request.parameters.numTurns);
+      const query = new URLSearchParams({
+        before: assertCursor(request.parameters.before),
+        include_has_versions: "true",
+        num_turns: String(request.parameters.numTurns),
+      });
+      return endpoint("GET", `/backend-api/conversations/${conversationId}/messages?${query}`, true, 100_000_000, request.operation);
     }
     case "conversation_batch": {
       const ids = request.parameters.conversationIds;
@@ -181,6 +205,25 @@ export function parseOperationRequest(value: unknown): ChatGptOperationParameter
         throw new EndpointValidationError("conversationIds must be an array of strings");
       }
       return { operation: request.operation, parameters: { conversationIds: [...parameters.conversationIds] } };
+    case "conversation_current":
+      assertOnlyKeys(parameters, ["conversationId", "numTurns"]);
+      return {
+        operation: request.operation,
+        parameters: {
+          conversationId: requireString(parameters.conversationId, "conversationId"),
+          numTurns: requireNumber(parameters.numTurns, "numTurns"),
+        },
+      };
+    case "conversation_messages":
+      assertOnlyKeys(parameters, ["conversationId", "before", "numTurns"]);
+      return {
+        operation: request.operation,
+        parameters: {
+          conversationId: requireString(parameters.conversationId, "conversationId"),
+          before: requireString(parameters.before, "before"),
+          numTurns: requireNumber(parameters.numTurns, "numTurns"),
+        },
+      };
     case "conversation_detail":
       assertOnlyKeys(parameters, ["conversationId"]);
       return {
@@ -265,8 +308,16 @@ function assertIdentifier(value: string, name: string): string {
 }
 
 function assertCursor(value: string): string {
-  if (!CURSOR.test(value)) throw new EndpointValidationError("cursor contains invalid characters");
+  if (value.length < 1 || value.length > MAX_CURSOR_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new EndpointValidationError("cursor is invalid");
+  }
   return value;
+}
+
+function assertNumTurns(value: number): void {
+  if (!Number.isInteger(value) || value < 1 || value > MAX_TURNS) {
+    throw new EndpointValidationError(`numTurns must be 1-${MAX_TURNS}`);
+  }
 }
 
 function assertOffset(value: number): void {
