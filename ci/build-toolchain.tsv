@@ -1,0 +1,3 @@
+build_id	target	toolchain	ick_revision	ick_status	ick_evidence
+chatgpt-web-probe-a1	armeabi-v7a	ndk	64fab64ff47acc627ce1154c3118f0232390cad5	gap:Android framework WebView JNI NativeActivity surface is not qualified in ICK	source:probe/native_activity.c
+chatgpt-web-probe-c67	arm64-v8a	ndk	64fab64ff47acc627ce1154c3118f0232390cad5	gap:Android framework WebView JNI NativeActivity surface is not qualified in ICK	source:probe/native_activity.c
