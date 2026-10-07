@@ -51,8 +51,30 @@ void ANativeActivity_onCreate(ANativeActivity *activity, void *saved_state, size
     jclass client_cls = find_class(env, "android/webkit/WebViewClient");
     jclass chrome_client_cls = find_class(env, "android/webkit/WebChromeClient");
     jclass activity_cls = find_class(env, "android/app/Activity");
+    jclass window_cls = find_class(env, "android/view/Window");
     if (!webview_cls || !settings_cls || !cookie_cls || !client_cls ||
-        !chrome_client_cls || !activity_cls) return;
+        !chrome_client_cls || !activity_cls || !window_cls) return;
+
+    /*
+     * NativeActivity claims the Window surface and InputQueue before loading
+     * this library. This probe wants an ordinary Android view hierarchy
+     * instead, so return both to PhoneWindow before installing the WebView.
+     */
+    jmethodID get_window = method(
+        env, activity_cls, "getWindow", "()Landroid/view/Window;");
+    if (!get_window) return;
+    jobject window = (*env)->CallObjectMethod(env, host, get_window);
+    if (!window || clear_exception(env, "getWindow")) return;
+
+    jmethodID take_surface = method(
+        env, window_cls, "takeSurface", "(Landroid/view/SurfaceHolder$Callback2;)V");
+    jmethodID take_input_queue = method(
+        env, window_cls, "takeInputQueue", "(Landroid/view/InputQueue$Callback;)V");
+    if (!take_surface || !take_input_queue) return;
+    (*env)->CallVoidMethod(env, window, take_surface, NULL);
+    if (clear_exception(env, "takeSurface(null)")) return;
+    (*env)->CallVoidMethod(env, window, take_input_queue, NULL);
+    if (clear_exception(env, "takeInputQueue(null)")) return;
 
     jmethodID enable_debug = static_method(
         env, webview_cls, "setWebContentsDebuggingEnabled", "(Z)V");
