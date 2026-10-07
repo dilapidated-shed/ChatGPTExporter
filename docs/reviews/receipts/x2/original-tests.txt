@@ -1,0 +1,34 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> chatgpt-exporter@0.1.6 test
+> vitest run --exclude **/*adversarial.test.ts --exclude **/evidence-validation-x2.test.ts
+
+
+ RUN  v3.2.7 /workspace/scratch/1fc8b6c61a01/ChatGPTExporter
+
+ ✓ tests/core/sha256-stream.test.ts (2 tests) 110ms
+ ✓ tests/chatgpt/client.test.ts (5 tests) 77ms
+ ✓ tests/chatgpt/inventory.test.ts (8 tests) 133ms
+ ✓ tests/chatgpt/audit.test.ts (3 tests) 62ms
+ ✓ tests/integration/resume-boundaries.test.ts (4 tests) 190ms
+ ✓ tests/integration/full-export.test.ts (2 tests) 326ms
+   ✓ deterministic full-scope export integration > inventories every scope, recovers an omitted batch record, captures content/assets, audits, and repeats byte-identically  313ms
+ ✓ tests/chatgpt/capture-engine.test.ts (9 tests) 332ms
+ ✓ tests/chatgpt/normalize.test.ts (4 tests) 55ms
+ ✓ tests/core/capture-store.test.ts (3 tests) 29ms
+ ✓ tests/chatgpt/capture.test.ts (15 tests) 59ms
+ ✓ tests/chatgpt/account-artifacts.test.ts (3 tests) 75ms
+ ✓ tests/chatgpt/endpoints.test.ts (6 tests) 18ms
+ ✓ tests/chatgpt/asset-session.test.ts (4 tests) 52ms
+ ✓ tests/chatgpt/auth.test.ts (3 tests) 31ms
+ ✓ tests/chatgpt/envelopes.test.ts (10 tests) 15ms
+ ✓ tests/core/filesystem-stream.test.ts (1 test) 8ms
+ ✓ tests/extension/protocol.test.ts (2 tests) 5ms
+ ✓ tests/chatgpt/assets.test.ts (5 tests) 35ms
+ ✓ tests/core/request-control.test.ts (5 tests) 21ms
+
+ Test Files  19 passed (19)
+      Tests  94 passed (94)
+   Start at  21:21:03
+   Duration  2.94s (transform 2.51s, setup 0ms, collect 5.85s, tests 1.63s, environment 22ms, prepare 3.60s)
+

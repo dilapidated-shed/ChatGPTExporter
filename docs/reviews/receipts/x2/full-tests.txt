@@ -1,0 +1,6 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> chatgpt-exporter@0.1.6 test
+> vitest run --reporter=json --outputFile=docs/reviews/receipts/x2/full-tests.json
+
+JSON report written to /workspace/scratch/1fc8b6c61a01/ChatGPTExporter/docs/reviews/receipts/x2/full-tests.json

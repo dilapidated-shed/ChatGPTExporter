@@ -1,0 +1,16 @@
+Observation date: 2026-10-07
+Production base: 274d878041403460a1249aa55b13d40769815bf2
+Audit test/report commit: c2156ae2547018173019fe2e4805cba997569fe8
+
+git diff origin/docs/chatgpt-web-api-reference HEAD -- docs/chatgpt-web-api/mirror
+Result: empty. Frozen mirrors match documentation ref ccca15d86418d708ec61f719feacee883a8a3d1e.
+
+git diff 274d878041403460a1249aa55b13d40769815bf2 HEAD -- src scripts package.json package-lock.json .github
+Result: empty. Production, build scripts, dependencies and workflow unchanged.
+
+Original 19 test files unchanged. Six new test files plus synthetic helper added.
+Typecheck exit 0. Build exit 0. Full expanded tests: 288 total, 247 passed, 41 failed, zero skipped.
+Original npm run check passed on an independent detached baseline checkout.
+Audit privacy exit 1: three known synthetic upstream test fixture literals; no live provider data collected.
+git diff --check also reports two existing trailing-space lines in frozen generated CLI help (142,286). Preserved rather than altering frozen evidence.
+No live provider acceptance or hosted workflow acceptance is claimed.

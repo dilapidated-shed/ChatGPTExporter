@@ -10,7 +10,7 @@ This is an independent community project and is not affiliated with or endorsed 
 
 - Every conversation found by normally terminating main, archived, project, and shared inventory chains.
 - Separate histories for every explicitly selected accessible workspace.
-- The complete provider graph, including branches and inactive nodes, plus deterministic selected-first Markdown.
+- Nodes and branches returned by legacy graph responses, or the returned current branch from plural paginated responses. Plural termination does not prove all sibling versions were returned.
 - Citations, browsing/tool/code records, Canvas content, completed deep research, unknown future content blocks, and raw provider extensions.
 - Uploaded files, generated images, audio, video, inline binaries, research files, and project-level files when ChatGPT permits retrieval.
 - Memories, custom instructions, settings, beta-feature settings, and sanitized workspace/session metadata as auxiliary account artifacts.
@@ -38,7 +38,7 @@ Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and
 3. Run preflight, then choose a parent directory. Each workspace receives an isolated `ChatGPTExport-<fingerprint>` directory.
 4. Select inventory scopes, build the inventory, review its aggregate counts and termination evidence, and confirm it.
 5. Start or resume capture. You can pause before the next request, resume, cancel safely, or rerun to retry incomplete records.
-6. Require the final state you need: `complete` means conversations and requested assets passed the independent audit; `conversations complete / assets partial` identifies explicit file exceptions; `incomplete` means the archive is not accepted.
+6. Review the reported terminal state and findings. The current audit can falsely report `complete` for structurally incomplete evidence; see the [2026-10-07 audit](docs/reviews/chatgpt-exporter-codebase-audit-2026-10-07.md). `conversations complete / assets partial` identifies explicit file exceptions; `incomplete` means the archive is not accepted.
 7. Read `reports/validation.md` inside each workspace archive. Use **Revalidate only** to prove local files without contacting ChatGPT.
 
 Do not run multiple exporters against the same account simultaneously. The default 250 ms delay, concurrency 1, and batch size 10 are deliberately conservative.

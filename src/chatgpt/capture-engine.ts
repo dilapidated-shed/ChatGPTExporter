@@ -8,8 +8,10 @@ import type { ConversationInventory, InventoryConversation, InventoryProject, Js
 import { ChatGptDetailFetcher, type RawBatchCapture, type RetrievedConversationDetail } from "./capture";
 import type { ChatGptTransport, DiscoveredWorkspace } from "./client";
 import { parseConversationDetail } from "./envelopes";
-import { NORMALIZER_VERSION, normalizeConversation } from "./normalize";
-import { ChatGptAssetManager } from "./assets";
+import { NORMALIZER_VERSION, normalizeConversation, linkNormalizedAssets } from "./normalize";
+import { ChatGptAssetManager, assetReferenceFindings } from "./assets";
+import { validateInventoryEvidence } from "./inventory-evidence";
+import { validateConversationEvidence } from "./evidence";
 import { AccountArtifactCapture } from "./account-artifacts";
 
 export interface ConversationCompletionMarker {
@@ -80,6 +82,8 @@ export class ChatGptCaptureEngine {
 
   async run(): Promise<CaptureRunResult> {
     const inventory = this.requireInventory(parseJson<ConversationInventory>(await this.options.filesystem.readText("inventory.json")));
+    const inventoryEvidence = await validateInventoryEvidence(this.options.filesystem, inventory);
+    if (inventoryEvidence.errors.length) throw new Error("Authoritative inventory evidence is invalid; capture/resume cannot use it.");
     const store = new CaptureStore(this.options.filesystem, this.options.runId, this.options.workspace.workspaceFingerprint, this.now);
     await store.start();
     const result: CaptureRunResult = {
@@ -279,9 +283,11 @@ export class ChatGptCaptureEngine {
       || marker.schemaVersion !== 1
       || marker.provider !== "chatgpt-web"
       || marker.logicalKey !== conversation.logicalKey
+      || marker.conversationId !== conversation.conversationId
       || marker.workspaceFingerprint !== this.options.workspace.workspaceFingerprint
       || marker.normalizerVersion !== NORMALIZER_VERSION
       || (this.options.includeAssets !== false && marker.assetStatus !== "complete")
+      || !Array.isArray(marker.listingHashes)
       || !sameSet(marker.listingHashes, conversation.listingHashes)) return false;
     const files: Array<[string, string]> = [
       [`${base}/raw-complete.json`, marker.rawMarkerHash],
@@ -293,7 +299,23 @@ export class ChatGptCaptureEngine {
       const content = await this.options.filesystem.readText(path);
       if (content === undefined || await sha256Hex(content) !== hash) return false;
     }
-    return Boolean(await store.validRawMarker(conversation));
+    const rawMarker = await store.validRawMarker(conversation);
+    if (!rawMarker || marker.detailHash !== rawMarker.detailHash) return false;
+    try {
+      const detail = JSON.parse((await this.options.filesystem.readText(rawMarker.detailPath))!);
+      const evidence = validateConversationEvidence(detail, conversation.conversationId, rawMarker.retrievalSource);
+      const assets = parseJson<import("../core/types").ConversationAssetIndex>(await this.options.filesystem.readText(`${base}/assets.json`));
+      if (!assets || !Array.isArray(assets.assets) || assets.status !== marker.assetStatus) return false;
+      if ((await assetReferenceFindings(evidence.detail, assets, conversation.conversationId, this.options.includeAssets === false)).length) return false;
+      const normalized = parseJson<import("../core/types").NormalizedConversation>(await this.options.filesystem.readText(`${base}/conversation.json`));
+      if (!normalized) return false;
+      const rebuilt = normalizeConversation(evidence.detail, conversation, this.options.workspace.workspaceFingerprint);
+      linkNormalizedAssets(rebuilt, assets.assets);
+      if (normalized.coverage === undefined) delete rebuilt.coverage;
+      return prettyJson(rebuilt) === prettyJson(normalized);
+    } catch {
+      return false;
+    }
   }
 
   private async writeRunReport(result: CaptureRunResult): Promise<void> {
@@ -400,17 +422,4 @@ function safeFailure(error: unknown): SafeFailure {
 function sameSet(left: string[], right: string[]): boolean {
   const sortedRight = [...right].sort();
   return left.length === right.length && [...left].sort().every((value, index) => value === sortedRight[index]);
-}
-
-function linkNormalizedAssets(normalized: ReturnType<typeof normalizeConversation>, assets: Array<{ providerId: string | null; relativePath: string | null; status: string }>): void {
-  const unused = assets.filter((asset) => asset.relativePath && asset.status === "complete");
-  for (const message of normalized.messages) {
-    for (const part of message.parts) {
-      if (part.kind !== "asset" || !part.assetId) continue;
-      const providerId = part.assetId.replace(/^(?:sediment|file-service):\/\//, "");
-      let index = unused.findIndex((asset) => asset.providerId === providerId);
-      if (index < 0) index = unused.findIndex((asset) => asset.providerId === null);
-      if (index >= 0) part.assetPath = unused.splice(index, 1)[0]!.relativePath!;
-    }
-  }
 }

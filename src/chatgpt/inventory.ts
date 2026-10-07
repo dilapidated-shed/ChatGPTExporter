@@ -79,6 +79,7 @@ export class ChatGptInventoryEngine {
       workspaceFingerprint: this.options.workspace.workspaceFingerprint,
       generatedAt: this.now().toISOString(),
       complete: this.chains.every((chain) => chain.complete),
+      evidenceModel: "page_receipts_v1",
       chains: [...this.chains],
       pages: [...this.pages],
       projects: [...this.projects.values()].sort((left, right) => left.projectId.localeCompare(right.projectId)),
@@ -438,7 +439,7 @@ function optionalCursor(value: JsonValue | undefined, name: string): string | nu
   return value;
 }
 
-function parseProject(value: JsonObject, index: number): Omit<InventoryProject, "rawHash"> {
+export function parseProject(value: JsonObject, index: number): Omit<InventoryProject, "rawHash"> {
   const first = isJsonObject(value.gizmo) ? value.gizmo : value;
   const project = isJsonObject(first.gizmo) ? first.gizmo : first;
   const projectId = requiredId(project, `project page item ${index}`);

@@ -1,0 +1,9 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> chatgpt-exporter@0.1.6 privacy:check
+> node scripts/privacy-check.mjs
+
+Privacy check failed:
+- docs/chatgpt-web-api/mirror/chatgpt-cli/254982ab784e4d13c7ab5f87de1522f9b047d0f5/crates/chatgpt/src/http/tests.rs:12: possible ChatGPT session cookie
+- docs/chatgpt-web-api/mirror/chatgpt-cli/254982ab784e4d13c7ab5f87de1522f9b047d0f5/crates/fake-chatgpt/src/lib.rs:25: possible ChatGPT session cookie
+- docs/chatgpt-web-api/mirror/chatgpt-cli/254982ab784e4d13c7ab5f87de1522f9b047d0f5/crates/fake-chatgpt/src/lib.rs:28: possible ChatGPT session cookie

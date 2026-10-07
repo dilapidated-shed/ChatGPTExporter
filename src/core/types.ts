@@ -83,6 +83,7 @@ export interface ConversationInventory {
   workspaceFingerprint: string;
   generatedAt: string;
   complete: boolean;
+  evidenceModel?: "page_receipts_v1";
   chains: InventoryChain[];
   pages: InventoryPageRecord[];
   projects?: InventoryProject[];
@@ -192,6 +193,7 @@ export interface NormalizedConversation {
   nodes: NormalizedNode[];
   messages: NormalizedMessage[];
   findings: ValidationFinding[];
+  coverage?: import("../chatgpt/evidence").ConversationCoverage;
   extensions: { chatgpt: JsonValue };
 }
 

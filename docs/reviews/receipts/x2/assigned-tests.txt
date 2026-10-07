@@ -1,0 +1,16 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> chatgpt-exporter@0.1.6 test
+> vitest run tests/integration/evidence-adversarial.test.ts tests/chatgpt/inventory-adversarial.test.ts --testNamePattern X1 structural completeness|X1 interruption and historical compatibility|audit detects asset references|audit detects missing authoritative
+
+
+ RUN  v3.2.7 /workspace/scratch/1fc8b6c61a01/ChatGPTExporter
+
+ ✓ tests/chatgpt/inventory-adversarial.test.ts (11 tests | 10 skipped) 22ms
+ ✓ tests/integration/evidence-adversarial.test.ts (60 tests | 9 skipped) 811ms
+
+ Test Files  2 passed (2)
+      Tests  52 passed | 19 skipped (71)
+   Start at  21:21:03
+   Duration  2.13s (transform 841ms, setup 0ms, collect 1.25s, tests 832ms, environment 0ms, prepare 427ms)
+

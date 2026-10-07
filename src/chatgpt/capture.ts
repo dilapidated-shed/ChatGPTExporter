@@ -390,7 +390,7 @@ interface ParsedPaginatedPage {
   startCursor: string | null;
 }
 
-function parsePaginatedPage(value: JsonValue, pageNumber: number): ParsedPaginatedPage {
+export function parsePaginatedPage(value: JsonValue, pageNumber: number): ParsedPaginatedPage {
   const object = jsonObject(value, `paginated conversation page ${pageNumber}`);
   if (!Array.isArray(object.messages)) {
     throw new DetailCaptureError("PAGINATION_INVALID_PAGE", `Paginated conversation page ${pageNumber} messages must be an array.`);
@@ -459,7 +459,7 @@ function canonicalJson(value: JsonValue): string {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key]!)}`).join(",")}}`;
 }
 
-function linearRootId(conversationId: string, messageIds: Set<string>): string {
+export function linearRootId(conversationId: string, messageIds: Set<string>): string {
   const base = `paginated_root_${conversationId}`.slice(0, 240);
   let candidate = base;
   let suffix = 0;

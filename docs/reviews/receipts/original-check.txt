@@ -1,0 +1,54 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> chatgpt-exporter@0.1.6 check
+> npm run typecheck && npm test && npm run privacy:check && npm run build
+
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> chatgpt-exporter@0.1.6 typecheck
+> tsc --noEmit
+
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> chatgpt-exporter@0.1.6 test
+> vitest run
+
+
+ RUN  v3.2.7 /workspace/scratch/7b11a2567047/exporter-baseline
+
+ ✓ tests/core/sha256-stream.test.ts (2 tests) 46ms
+ ✓ tests/chatgpt/account-artifacts.test.ts (3 tests) 15ms
+ ✓ tests/chatgpt/inventory.test.ts (8 tests) 30ms
+ ✓ tests/chatgpt/audit.test.ts (3 tests) 28ms
+ ✓ tests/integration/resume-boundaries.test.ts (4 tests) 50ms
+ ✓ tests/chatgpt/capture-engine.test.ts (9 tests) 69ms
+ ✓ tests/integration/full-export.test.ts (2 tests) 120ms
+ ✓ tests/chatgpt/capture.test.ts (15 tests) 15ms
+ ✓ tests/chatgpt/asset-session.test.ts (4 tests) 16ms
+ ✓ tests/chatgpt/client.test.ts (5 tests) 24ms
+ ✓ tests/chatgpt/endpoints.test.ts (6 tests) 9ms
+ ✓ tests/chatgpt/normalize.test.ts (4 tests) 18ms
+ ✓ tests/chatgpt/assets.test.ts (5 tests) 12ms
+ ✓ tests/chatgpt/auth.test.ts (3 tests) 11ms
+ ✓ tests/chatgpt/envelopes.test.ts (10 tests) 13ms
+ ✓ tests/core/capture-store.test.ts (3 tests) 22ms
+ ✓ tests/core/request-control.test.ts (5 tests) 8ms
+ ✓ tests/extension/protocol.test.ts (2 tests) 3ms
+ ✓ tests/core/filesystem-stream.test.ts (1 test) 3ms
+
+ Test Files  19 passed (19)
+      Tests  94 passed (94)
+   Start at  15:35:52
+   Duration  1.01s (transform 849ms, setup 0ms, collect 1.97s, tests 510ms, environment 3ms, prepare 1.19s)
+
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> chatgpt-exporter@0.1.6 privacy:check
+> node scripts/privacy-check.mjs
+
+Privacy check passed for 74 tracked/unignored files.
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> chatgpt-exporter@0.1.6 build
+> node scripts/build.mjs
+

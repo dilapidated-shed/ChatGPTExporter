@@ -3,6 +3,7 @@ import { sha256Hex } from "./hash";
 import { conversationBasePath, safePathSegment } from "./paths";
 import { parseJson, prettyJson } from "./serialization";
 import type { CaptureJournalEntry, CaptureStage, InventoryConversation, JsonValue, SafeFailure } from "./types";
+import { validateConversationEvidence } from "../chatgpt/evidence";
 
 export interface RunJournal {
   schemaVersion: 1;
@@ -120,10 +121,15 @@ export class CaptureStore {
       || marker.logicalKey !== conversation.logicalKey
       || marker.conversationId !== conversation.conversationId
       || marker.workspaceFingerprint !== this.workspaceFingerprint
+      || !Array.isArray(marker.listingHashes)
       || !sameSet(marker.listingHashes, conversation.listingHashes)) return undefined;
     const detail = await this.filesystem.readText(marker.detailPath);
     if (detail === undefined || await sha256Hex(detail) !== marker.detailHash) return undefined;
-    if (marker.retrievalSource === "current" && !hasCompletePaginationEvidence(detail)) return undefined;
+    try {
+      validateConversationEvidence(JSON.parse(detail), conversation.conversationId, marker.retrievalSource);
+    } catch {
+      return undefined;
+    }
     if ((marker.batchHash === null) !== (marker.batchPath === null)) return undefined;
     if (marker.batchHash && marker.batchPath) {
       const batch = await this.filesystem.readText(marker.batchPath);
@@ -152,50 +158,4 @@ export class CaptureStore {
 
 function sameSet(left: string[], right: string[]): boolean {
   return left.length === right.length && [...left].sort().every((value, index) => value === [...right].sort()[index]);
-}
-
-
-function hasCompletePaginationEvidence(detailText: string): boolean {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(detailText);
-  } catch {
-    return false;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
-  const evidence = (parsed as Record<string, unknown>).__pagination_evidence;
-  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
-  const record = evidence as Record<string, unknown>;
-  if (record.schema_version !== 1 || record.complete !== true || !Array.isArray(record.pages)) return false;
-  if (!Number.isInteger(record.page_count) || record.page_count !== record.pages.length || record.pages.length === 0) return false;
-
-  const seenCursors = new Set<string>();
-  let expectedBefore: string | null = null;
-  for (let index = 0; index < record.pages.length; index += 1) {
-    const page = record.pages[index];
-    if (!page || typeof page !== "object" || Array.isArray(page)) return false;
-    const pageRecord = page as Record<string, unknown>;
-    const request = pageRecord.request;
-    const response = pageRecord.response;
-    if (!request || typeof request !== "object" || Array.isArray(request)) return false;
-    if (!response || typeof response !== "object" || Array.isArray(response)) return false;
-    const requestRecord = request as Record<string, unknown>;
-    const responseRecord = response as Record<string, unknown>;
-    if ((requestRecord.before ?? null) !== expectedBefore) return false;
-    const pageInfo = responseRecord.page_info;
-    if (!pageInfo || typeof pageInfo !== "object" || Array.isArray(pageInfo)) return false;
-    const pageInfoRecord = pageInfo as Record<string, unknown>;
-    if (typeof pageInfoRecord.has_previous_page !== "boolean") return false;
-    const cursor = pageInfoRecord.start_cursor;
-    if (pageInfoRecord.has_previous_page === true) {
-      if (typeof cursor !== "string" || cursor.length === 0 || seenCursors.has(cursor)) return false;
-      if (index === record.pages.length - 1) return false;
-      seenCursors.add(cursor);
-      expectedBefore = cursor;
-    } else {
-      if (index !== record.pages.length - 1) return false;
-      expectedBefore = null;
-    }
-  }
-  return true;
 }
