@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { CaptureStore, type RawCompletionMarker } from "../../src/core/capture-store";
 import { MemoryArchiveFileSystem } from "../../src/core/filesystem";
 import type { InventoryConversation } from "../../src/core/types";
+import { conversationDetail } from "../fixtures/chatgpt";
+import { toJsonValue } from "../../src/core/serialization";
 
 const conversation: InventoryConversation = {
   logicalKey: `${"a".repeat(32)}/conversation-1`,
@@ -43,7 +45,8 @@ describe("append-preserving capture store", () => {
   it("resumes only from a marker whose identity, listings, and referenced bytes all validate", async () => {
     const filesystem = new MemoryArchiveFileSystem();
     const store = new CaptureStore(filesystem, "run-1", "a".repeat(32));
-    const detail = await store.writeRawRevision("conversation-1", "detail", { id: "conversation-1" });
+    // This positive resume case needs a valid graph, not an identity-only stub.
+    const detail = await store.writeRawRevision("conversation-1", "detail", toJsonValue(conversationDetail()));
     const marker: RawCompletionMarker = {
       schemaVersion: 1,
       provider: "chatgpt-web",

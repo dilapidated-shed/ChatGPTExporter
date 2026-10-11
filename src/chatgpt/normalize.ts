@@ -14,6 +14,19 @@ import type {
 
 export const NORMALIZER_VERSION = "chatgpt-web-v1";
 
+export function linkNormalizedAssets(normalized: NormalizedConversation, assets: Array<{ providerId: string | null; relativePath: string | null; status: string }>): void {
+  const unused = assets.filter((asset) => asset.relativePath && asset.status === "complete");
+  for (const message of normalized.messages) {
+    for (const part of message.parts) {
+      if (part.kind !== "asset" || !part.assetId) continue;
+      const providerId = part.assetId.replace(/^(?:sediment|file-service):\/\//, "");
+      let index = unused.findIndex((asset) => asset.providerId === providerId);
+      if (index < 0) index = unused.findIndex((asset) => asset.providerId === null);
+      if (index >= 0) part.assetPath = unused.splice(index, 1)[0]!.relativePath!;
+    }
+  }
+}
+
 export function normalizeConversation(
   raw: ChatGptConversationDetail,
   inventory: InventoryConversation,
@@ -80,6 +93,7 @@ export function normalizeConversation(
     nodes,
     messages,
     findings,
+    coverage: { messages: Object.hasOwn(raw, "__pagination_evidence") ? "current_branch" : "returned_provider_graph", providerGraph: "unknown", versions: "unknown" },
     extensions: { chatgpt: toJsonValue(conversationExtensions(raw)) },
   };
 }

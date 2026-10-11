@@ -1,6 +1,8 @@
 import type { ArchiveFileSystem } from "../core/filesystem";
 import { extensionFromMediaType, safePathSegment } from "../core/paths";
 import { IncrementalSha256 } from "../core/sha256-stream";
+import { sha256Hex } from "../core/hash";
+import { prettyJson } from "../core/serialization";
 import type { AssetRecord, ConversationAssetIndex, InventoryConversation, InventoryProject, JsonValue, ProjectAssetIndex, SafeFailure } from "../core/types";
 import { decodeBase64, MAX_ASSET_CHUNK_BYTES } from "./asset-session";
 import type { ChatGptTransport, DiscoveredWorkspace } from "./client";
@@ -232,6 +234,30 @@ export function discoverAssets(detail: ChatGptConversationDetail): DiscoveredAss
     visit((node.message.metadata ?? {}) as unknown as JsonValue, `message-${node.message.id}-metadata`, node.message.id, output);
   }
   return output.filter((asset, index) => output.findIndex((candidate) => candidate.logicalId === asset.logicalId) === index);
+}
+
+/** Re-derive logical references from provider content; no transport or file effects. */
+export async function assetReferenceFindings(detail: ChatGptConversationDetail, index: ConversationAssetIndex, conversationId: string, allowNotRequested = false): Promise<Array<{ code: string; message: string }>> {
+  const findings: Array<{ code: string; message: string }> = [];
+  const add = (code: string, message: string) => findings.push({ code, message });
+  if (index.schemaVersion !== 1 || index.conversationId !== conversationId) add("ASSET_INDEX_IDENTITY", "Conversation asset index identity is invalid.");
+  const descriptors = discoverAssets(detail);
+  if (index.status === "not_requested") {
+    if (index.assets.length) add("ASSET_INDEX_STATUS", "Unrequested asset index contains downloaded references.");
+    if (descriptors.length && !allowNotRequested) add("ASSET_NOT_CAPTURED", "Raw asset references exist but asset capture was not requested.");
+    return findings;
+  }
+  const actualStatus = index.assets.some(asset => asset.status === "failed") ? "partial" : "complete";
+  if (index.status !== actualStatus || index.assets.some(asset => asset.status !== "complete" && asset.status !== "failed")) add("ASSET_INDEX_STATUS", "Asset status disagrees with logical reference records.");
+  if (prettyJson(descriptors.map(asset => asset.logicalId).sort()) !== prettyJson(index.assets.map(asset => asset.logicalId).sort())) add("ASSET_REFERENCE_SET_MISMATCH", "Raw messages and logical asset references differ.");
+  for (const descriptor of descriptors) {
+    const asset = index.assets.find(asset => asset.logicalId === descriptor.logicalId);
+    if (!asset) continue;
+    if (asset.providerId !== descriptor.providerId || asset.sourceMessageId !== descriptor.sourceMessageId || asset.kind !== descriptor.kind
+      || prettyJson(asset.rawDescriptor) !== prettyJson(descriptor.rawDescriptor)) add("ASSET_REFERENCE_CONTENT_MISMATCH", "Logical asset reference disagrees with raw descriptor.");
+    if (descriptor.inlineBytes && asset.status === "complete" && (asset.sha256 !== await sha256Hex(descriptor.inlineBytes) || asset.byteSize !== descriptor.inlineBytes.byteLength)) add("ASSET_INLINE_CONTENT_MISMATCH", "Stored inline asset does not match raw message bytes.");
+  }
+  return findings;
 }
 
 export class AssetCaptureError extends Error {
