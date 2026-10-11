@@ -221,7 +221,7 @@ async function runInventory(): Promise<void> {
   chooseButton.disabled = true;
   workspaceSelect.disabled = true;
   preflightButton.disabled = true;
-  setStatus("Building complete inventory; conversation bodies are not being downloaded yet…", "busy");
+  setStatus("Enumerating available conversations; provider totals and changing offsets cannot guarantee a complete snapshot…", "busy");
   try {
     const controlled = createControlledTransport(runtimeTransport);
     activeController = controlled;
@@ -247,10 +247,18 @@ async function runInventory(): Promise<void> {
     const pageCount = [...inventories.values()].reduce((sum, inventory) => sum + inventory.pages.length, 0);
     const projectCount = [...inventories.values()].reduce((sum, inventory) => sum + (inventory.projects?.length ?? 0), 0);
     const responseBytes = [...inventories.values()].flatMap((inventory) => inventory.pages).reduce((sum, page) => sum + page.responseBytes, 0);
-    setStatus(`Inventory complete: ${conversationCount} workspace-scoped conversations across ${inventories.size} isolated archives.`, "ready");
-    inventorySummary.textContent = `${conversationCount} conversations, ${projectCount} projects, ${pageCount} raw listing pages, ${formatBytes(responseBytes)} of listing responses. Review these aggregate counts, then confirm.`;
-    log.textContent = "Every enabled inventory chain terminated normally and its reconciliation report was published. Confirmation is required before body capture.";
-    confirmInventoryButton.disabled = false;
+    const unstable = [...inventories.values()].filter((inventory) => !inventory.complete);
+    if (unstable.length) {
+      setStatus(`Inventory traversal ended but ${unstable.length} workspace(s) showed offset movement or inconsistent totals; no complete discovery claim.`, "error");
+      inventorySummary.textContent = `${conversationCount} observed conversations, ${projectCount} projects, ${pageCount} raw listing pages, ${formatBytes(responseBytes)} of listing responses. Recorded observations are retained; review reconciliation and retry inventory before capture.`;
+      log.textContent = "Detected changing offset views or count hints. Previously observed conversations are not deleted. The current inventory is marked incomplete and cannot be confirmed for capture.";
+      confirmInventoryButton.disabled = true;
+    } else {
+      setStatus(`Listing traversal ended: ${conversationCount} observed conversations across ${inventories.size} archives (provider snapshot unverified).`, "ready");
+      inventorySummary.textContent = `${conversationCount} observed conversations, ${projectCount} projects, ${pageCount} raw listing pages, ${formatBytes(responseBytes)} of listing responses. Review aggregate counts, then confirm the observed inventory.`;
+      log.textContent = "Enabled listing chains ended normally. This is not proof of a stable/exhaustive provider snapshot; counts are hints. Confirmation precedes body capture.";
+      confirmInventoryButton.disabled = false;
+    }
     revalidateButton.disabled = false;
   } catch (error) {
     showError(error);

@@ -35,6 +35,8 @@ export async function validateInventoryEvidence(filesystem: ArchiveFileSystem, i
     const seenCursors = new Set<string>();
     const seenIds = new Set<string>();
     let itemCount = 0;
+    let lastReportedTotal: number | null = null;
+    let offsetInstability = false;
     for (const [index, page] of pages.entries()) {
       const path = `source/inventory/${safePathSegment(page.scope)}/${safePathSegment(page.chainId, "chain", 220)}/page-${String(page.pageNumber).padStart(6, "0")}-${page.rawResponseHash}.json`;
       const text = await filesystem.readText(path);
@@ -68,6 +70,7 @@ export async function validateInventoryEvidence(filesystem: ArchiveFileSystem, i
         observed.set(conversationId, record);
       }
       const duplicates = ids.filter(id => seenIds.has(id)).length;
+      if (chain.scope !== "project" && (duplicates > 0 || new Set(ids).size !== ids.length)) offsetInstability = true;
       ids.forEach(id => seenIds.add(id));
       itemCount += items.length;
       if (page.pageNumber !== index + 1 || page.itemCount !== items.length || page.duplicateCount !== duplicates
@@ -87,14 +90,36 @@ export async function validateInventoryEvidence(filesystem: ArchiveFileSystem, i
         if (page.request.offset !== offset || !Number.isInteger(page.request.limit) || page.request.limit! < 1 || page.nextCursor !== null
           || (total !== null && (!Number.isInteger(total) || Number(total) < 0))) errors.push(`offset linkage: ${path}`);
         offset += items.length;
+        if (typeof total === "number") {
+          if ((lastReportedTotal !== null && lastReportedTotal !== total) || total < offset) offsetInstability = true;
+          lastReportedTotal = total;
+        }
         if (!items.length) {
-          if (total !== null && offset < Number(total)) errors.push(`premature empty: ${path}`);
+          if (total !== null && offset < Number(total)) {
+            if (page.request.offset === 0) errors.push(`premature empty: ${path}`);
+            else offsetInstability = true;
+          }
           termination = total === 0 && offset === 0 ? "recognized_empty_account" : "empty_page";
-        } else if (total !== null && offset >= Number(total)) termination = "declared_total_reached";
+        } else if (inventory.discovery) {
+          if (total !== null && offset >= Number(total) && items.length < Number(page.request.limit)) termination = "short_page";
+        } else if (total !== null && offset >= Number(total)) {
+          // Older captured inventories used a total-only stop. Replay their
+          // historical contract without upgrading their provider coverage.
+          termination = "declared_total_reached";
+        }
       }
       if (page.terminationReason !== termination || Boolean(termination) !== final || (final && chain.terminationReason !== termination)) errors.push(`termination: ${path}`);
     }
     if (chain.itemCount !== itemCount || chain.uniqueConversationCount !== (chain.scope === "project" && !chain.projectId ? 0 : seenIds.size)) errors.push(`chain summary: ${key}`);
+    if (inventory.discovery && chain.scope !== "project" && chain.offsetInstability !== offsetInstability) errors.push(`offset instability mismatch: ${key}`);
+  }
+  if (inventory.discovery) {
+    const traversalComplete = inventory.chains.every(chain => chain.complete === true && chain.terminationReason !== null);
+    const offsetInstability = inventory.chains.some(chain => chain.offsetInstability === true);
+    if (inventory.discovery.traversalComplete !== traversalComplete
+      || inventory.discovery.providerSnapshot !== "unverified"
+      || inventory.discovery.offsetInstability !== offsetInstability
+      || inventory.complete !== (traversalComplete && !offsetInstability)) errors.push("discovery claims disagree with raw traversal");
   }
   for (const page of inventory.pages) if (!declaredChains.has(`${page.scope}/${page.chainId}`)) errors.push("undeclared page chain");
   if (!declaredChains.size) errors.push("missing inventory chains");

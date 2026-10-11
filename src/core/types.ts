@@ -5,6 +5,7 @@ export type JsonObject = { [key: string]: JsonValue };
 export type ConversationScope = "main" | "archived" | "project" | "shared";
 export type ScopeTermination =
   | "declared_total_reached"
+  | "short_page"
   | "empty_page"
   | "cursor_exhausted"
   | "recognized_empty_account";
@@ -75,6 +76,8 @@ export interface InventoryChain {
   pageCount: number;
   itemCount: number;
   uniqueConversationCount: number;
+  /** Recomputed from raw offset pages by independent inventory evidence validation. */
+  offsetInstability?: boolean;
 }
 
 export interface ConversationInventory {
@@ -82,7 +85,13 @@ export interface ConversationInventory {
   provider: "chatgpt-web";
   workspaceFingerprint: string;
   generatedAt: string;
+  /** Normal traversal with no observed offset inconsistency; NOT account-wide completeness. */
   complete: boolean;
+  discovery?: {
+    traversalComplete: boolean;
+    providerSnapshot: "unverified";
+    offsetInstability: boolean;
+  };
   evidenceModel?: "page_receipts_v1";
   chains: InventoryChain[];
   pages: InventoryPageRecord[];
