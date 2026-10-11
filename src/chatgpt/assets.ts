@@ -44,9 +44,15 @@ export class ChatGptAssetManager {
     if (!Number.isInteger(settings.chunkBytes) || settings.chunkBytes < 1 || settings.chunkBytes > MAX_ASSET_CHUNK_BYTES) throw new Error("Asset chunk size is invalid.");
   }
 
-  async capture(detail: ChatGptConversationDetail, inventory: InventoryConversation): Promise<ConversationAssetIndex> {
+  async capture(
+    detail: ChatGptConversationDetail,
+    inventory: InventoryConversation,
+    previous?: ConversationAssetIndex,
+  ): Promise<ConversationAssetIndex> {
     const descriptors = discoverAssets(detail);
-    const assets = await this.captureDescriptors(descriptors, { conversationId: inventory.conversationId, projectId: null });
+    const reusable = previous?.schemaVersion === 1 && previous.conversationId === inventory.conversationId
+      ? previous.assets : undefined;
+    const assets = await this.captureDescriptors(descriptors, { conversationId: inventory.conversationId, projectId: null }, reusable);
     return {
       schemaVersion: 1,
       conversationId: inventory.conversationId,
@@ -55,17 +61,11 @@ export class ChatGptAssetManager {
     };
   }
 
-  async captureProject(project: InventoryProject): Promise<ProjectAssetIndex> {
-    const descriptors: DiscoveredAsset[] = project.files.map((file) => ({
-      logicalId: file.logicalId,
-      providerId: file.providerId,
-      sourceMessageId: null,
-      kind: "upload",
-      originalName: file.originalName,
-      mediaType: file.mediaType,
-      rawDescriptor: redactValue(file.rawDescriptor),
-    }));
-    const assets = await this.captureDescriptors(descriptors, { conversationId: null, projectId: project.projectId });
+  async captureProject(project: InventoryProject, previous?: ProjectAssetIndex): Promise<ProjectAssetIndex> {
+    const descriptors = this.projectDescriptors(project);
+    const reusable = previous?.schemaVersion === 1 && previous.projectId === project.projectId
+      ? previous.assets : undefined;
+    const assets = await this.captureDescriptors(descriptors, { conversationId: null, projectId: project.projectId }, reusable);
     return {
       schemaVersion: 1,
       projectId: project.projectId,
@@ -74,14 +74,70 @@ export class ChatGptAssetManager {
     };
   }
 
+  /**
+   * A project completion marker is reusable only when its descriptors AND actual
+   * content-addressed bytes agree. No provider request is needed to verify it.
+   */
+  async validProjectCapture(project: InventoryProject, index: ProjectAssetIndex, expectedStatus: "complete" | "not_requested"): Promise<boolean> {
+    if (index.schemaVersion !== 1 || index.projectId !== project.projectId || index.status !== expectedStatus
+      || !Array.isArray(index.assets)) return false;
+    if (expectedStatus === "not_requested") return index.assets.length === 0;
+    const descriptors = this.projectDescriptors(project);
+    if (descriptors.length !== index.assets.length) return false;
+    const byId = new Map(index.assets.map(asset => [asset.logicalId, asset]));
+    if (byId.size !== index.assets.length) return false;
+    for (const descriptor of descriptors) {
+      if (!await this.reusableRecord(descriptor, byId.get(descriptor.logicalId))) return false;
+    }
+    return true;
+  }
+
+  private projectDescriptors(project: InventoryProject): DiscoveredAsset[] {
+    return project.files.map(file => ({
+      logicalId: file.logicalId,
+      providerId: file.providerId,
+      sourceMessageId: null,
+      kind: "upload",
+      originalName: file.originalName,
+      mediaType: file.mediaType,
+      rawDescriptor: redactValue(file.rawDescriptor),
+    }));
+  }
+
+  private async reusableRecord(descriptor: DiscoveredAsset, asset: AssetRecord | undefined): Promise<boolean> {
+    if (!asset || asset.logicalId !== descriptor.logicalId || asset.status !== "complete"
+      || asset.providerId !== descriptor.providerId || asset.sourceMessageId !== descriptor.sourceMessageId
+      || asset.kind !== descriptor.kind || asset.originalName !== descriptor.originalName
+      || asset.adapter !== (descriptor.inlineBytes ? "inline" : "chatgpt-file-download")
+      || prettyJson(asset.rawDescriptor) !== prettyJson(descriptor.rawDescriptor)) return false;
+    if (descriptor.inlineBytes && asset.sha256 !== await sha256Hex(descriptor.inlineBytes)) return false;
+    return verifyPhysicalAsset(this.options.filesystem, asset);
+  }
+
   private async captureDescriptors(
     descriptors: DiscoveredAsset[],
     context: { conversationId: string | null; projectId: string | null },
+    previouslyCaptured?: AssetRecord[],
   ): Promise<AssetRecord[]> {
     const assets: AssetRecord[] = [];
     let aggregateBytes = 0;
+    const previous = new Map((previouslyCaptured ?? []).map(asset => [asset.logicalId, asset]));
+    // Duplicate logical IDs are not allowed to bypass identity checks.
+    const duplicates = new Set<string>();
+    for (const asset of previouslyCaptured ?? []) {
+      if (previouslyCaptured?.filter(candidate => candidate.logicalId === asset.logicalId).length !== 1) duplicates.add(asset.logicalId);
+    }
     for (const descriptor of descriptors) {
       try {
+        const stored = duplicates.has(descriptor.logicalId) ? undefined : previous.get(descriptor.logicalId);
+        if (await this.reusableRecord(descriptor, stored)) {
+          aggregateBytes += stored!.byteSize!;
+          if (aggregateBytes > this.settings().maxConversationBytes) {
+            throw new AssetCaptureError("ASSET_SCOPE_LIMIT", "Conversation or project assets exceeded the configured byte limit.");
+          }
+          assets.push(stored!);
+          continue;
+        }
         const cacheKey = descriptor.inlineBytes
           ? null
           : `${descriptor.providerId ?? ""}\0${context.conversationId ?? ""}\0${context.projectId ?? ""}`;
@@ -206,7 +262,12 @@ export class ChatGptAssetManager {
       const sha256 = hash.digestHex();
       const extension = extensionFromMediaType(descriptor.mediaType, prefix);
       const finalPath = `assets/${sha256}.${extension}`;
-      if (!await this.options.filesystem.exists(finalPath)) {
+      if (byteSize === 0) throw new AssetCaptureError("ASSET_EMPTY", "A downloaded asset has no bytes.");
+      const present = await hashFile(this.options.filesystem, finalPath).catch(() => null);
+      if (!present || present.sha256 !== sha256 || present.byteSize !== byteSize) {
+        // The name is content-addressed, but an older physical file may be
+        // corrupt. Copy only already-hashed staged bytes, then re-read and
+        // verify the repaired destination. No trusted raw evidence is changed.
         await this.options.filesystem.writeByteChunksAtomic(finalPath, this.options.filesystem.readByteChunks(stagingPath));
       }
       const verified = await hashFile(this.options.filesystem, finalPath);
@@ -265,6 +326,32 @@ export class AssetCaptureError extends Error {
     super(message);
     this.name = "AssetCaptureError";
   }
+}
+
+/**
+ * Check real stored bytes, not an asset index hash or a completion marker.
+ * AssetRecord.relativePath uses the archive-root ../../assets/ convention.
+ * Paths other than the exact content-addressed asset store are never followed.
+ */
+export async function verifyPhysicalAsset(filesystem: ArchiveFileSystem, asset: AssetRecord): Promise<boolean> {
+  if (asset.status !== "complete" || typeof asset.sha256 !== "string"
+    || !/^[0-9a-f]{64}$/.test(asset.sha256)
+    || typeof asset.byteSize !== "number" || !Number.isSafeInteger(asset.byteSize) || asset.byteSize <= 0
+    || typeof asset.relativePath !== "string") return false;
+  const path = asset.relativePath.startsWith("../../") ? asset.relativePath.slice(6) : "";
+  if (!/^assets\/[0-9a-f]{64}\.[A-Za-z0-9_-]{1,12}$/.test(path)
+    || !path.startsWith(`assets/${asset.sha256}.`)) return false;
+  try {
+    const measured = await hashFile(filesystem, path);
+    return measured.byteSize === asset.byteSize && measured.sha256 === asset.sha256;
+  } catch {
+    return false; // Missing/denied/short-read files are never successfully resumed.
+  }
+}
+
+export async function verifyPhysicalAssetRecords(filesystem: ArchiveFileSystem, records: AssetRecord[]): Promise<boolean> {
+  for (const asset of records) if (!await verifyPhysicalAsset(filesystem, asset)) return false;
+  return true;
 }
 
 async function hashFile(filesystem: ArchiveFileSystem, path: string): Promise<{ sha256: string; byteSize: number }> {

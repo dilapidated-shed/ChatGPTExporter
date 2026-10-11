@@ -9,7 +9,7 @@ import { ChatGptDetailFetcher, type RawBatchCapture, type RetrievedConversationD
 import type { ChatGptTransport, DiscoveredWorkspace } from "./client";
 import { parseConversationDetail } from "./envelopes";
 import { NORMALIZER_VERSION, normalizeConversation, linkNormalizedAssets } from "./normalize";
-import { ChatGptAssetManager, assetReferenceFindings } from "./assets";
+import { ChatGptAssetManager, assetReferenceFindings, verifyPhysicalAssetRecords } from "./assets";
 import { validateInventoryEvidence } from "./inventory-evidence";
 import { validateConversationEvidence } from "./evidence";
 import { AccountArtifactCapture } from "./account-artifacts";
@@ -228,7 +228,8 @@ export class ChatGptCaptureEngine {
     if (normalized.findings.some((finding) => finding.severity === "error")) throw new Error(`Normalization produced graph errors for ${conversation.conversationId}.`);
     const assets = this.options.includeAssets === false
       ? { schemaVersion: 1 as const, conversationId: conversation.conversationId, status: "not_requested" as const, assets: [] }
-      : await assetManager.capture(detail, conversation);
+      : await assetManager.capture(detail, conversation, parseJson<import("../core/types").ConversationAssetIndex>(
+        await this.options.filesystem.readText(`${conversationBasePath(conversation.conversationId)}/assets.json`)));
     linkNormalizedAssets(normalized, assets.assets);
     const normalizedText = prettyJson(normalized);
     const markdown = renderConversationMarkdown(normalized);
@@ -308,6 +309,7 @@ export class ChatGptCaptureEngine {
       const assets = parseJson<import("../core/types").ConversationAssetIndex>(await this.options.filesystem.readText(`${base}/assets.json`));
       if (!assets || !Array.isArray(assets.assets) || assets.status !== marker.assetStatus) return false;
       if ((await assetReferenceFindings(evidence.detail, assets, conversation.conversationId, this.options.includeAssets === false)).length) return false;
+      if (this.options.includeAssets !== false && !await verifyPhysicalAssetRecords(this.options.filesystem, assets.assets)) return false;
       const normalized = parseJson<import("../core/types").NormalizedConversation>(await this.options.filesystem.readText(`${base}/conversation.json`));
       if (!normalized) return false;
       const rebuilt = normalizeConversation(evidence.detail, conversation, this.options.workspace.workspaceFingerprint);
@@ -349,21 +351,23 @@ export class ChatGptCaptureEngine {
       const existing = parseJson<ProjectAssetCompletionMarker>(await this.options.filesystem.readText(`${base}/complete.json`));
       const existingAssets = await this.options.filesystem.readText(`${base}/assets.json`);
       const expectedStatus = this.options.includeAssets === false ? "not_requested" : "complete";
-      if (existing
+      const parsed = parseJson<ProjectAssetIndex>(existingAssets);
+      const validSource = existing
         && existing.schemaVersion === 1
         && existing.provider === "chatgpt-web"
         && existing.projectId === project.projectId
-        && existing.projectRawHash === project.rawHash
+        && existing.projectRawHash === project.rawHash;
+      if (validSource
         && existing.status === expectedStatus
         && existingAssets !== undefined
-        && await sha256Hex(existingAssets) === existing.assetsHash) {
-        const parsed = parseJson<ProjectAssetIndex>(existingAssets);
-        assetCount += parsed?.assets.length ?? 0;
+        && await sha256Hex(existingAssets) === existing.assetsHash
+        && parsed && await assetManager.validProjectCapture(project, parsed, expectedStatus)) {
+        assetCount += parsed.assets.length;
         continue;
       }
       const assets: ProjectAssetIndex = this.options.includeAssets === false
         ? { schemaVersion: 1, projectId: project.projectId, status: "not_requested", assets: [] }
-        : await assetManager.captureProject(project);
+        : await assetManager.captureProject(project, validSource && parsed ? parsed : undefined);
       const assetsText = prettyJson(assets);
       const marker: ProjectAssetCompletionMarker = {
         schemaVersion: 1,
