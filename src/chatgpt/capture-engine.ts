@@ -2,7 +2,7 @@ import { CaptureStore, type RawCompletionMarker } from "../core/capture-store";
 import type { ArchiveFileSystem } from "../core/filesystem";
 import { sha256Hex } from "../core/hash";
 import { renderConversationMarkdown } from "../core/markdown";
-import { conversationBasePath } from "../core/paths";
+import { conversationBasePath, legacyConversationBasePath } from "../core/paths";
 import { parseJson, prettyJson } from "../core/serialization";
 import type { ConversationInventory, InventoryConversation, InventoryProject, JsonValue, ProjectAssetIndex, SafeFailure } from "../core/types";
 import { ChatGptDetailFetcher, type RawBatchCapture, type RetrievedConversationDetail } from "./capture";
@@ -84,6 +84,7 @@ export class ChatGptCaptureEngine {
     const inventory = this.requireInventory(parseJson<ConversationInventory>(await this.options.filesystem.readText("inventory.json")));
     const inventoryEvidence = await validateInventoryEvidence(this.options.filesystem, inventory);
     if (inventoryEvidence.errors.length) throw new Error("Authoritative inventory evidence is invalid; capture/resume cannot use it.");
+    await assertSafeConversationPaths(this.options.filesystem, inventory.conversations);
     const store = new CaptureStore(this.options.filesystem, this.options.runId, this.options.workspace.workspaceFingerprint, this.now);
     await store.start();
     const result: CaptureRunResult = {
@@ -393,6 +394,35 @@ export class ChatGptCaptureEngine {
       total: result.inventoryCount,
       conversationId,
     });
+  }
+}
+
+/** Do not silently abandon or overwrite old lossy-layout records.
+ * No live files are moved or deleted; exceptional legacy data needs explicit migration.
+ */
+async function assertSafeConversationPaths(filesystem: ArchiveFileSystem, conversations: InventoryConversation[]): Promise<void> {
+  const used = new Map<string, string>();
+  for (const conversation of conversations) {
+    const key = conversationBasePath(conversation.conversationId).toLowerCase();
+    const prior = used.get(key);
+    if (prior !== undefined && prior !== conversation.conversationId) {
+      throw new Error("Multiple conversation IDs resolve to one archive path.");
+    }
+    used.set(key, conversation.conversationId);
+  }
+  const legacyCandidates = conversations.filter(conversation =>
+    legacyConversationBasePath(conversation.conversationId) !== conversationBasePath(conversation.conversationId));
+  if (!legacyCandidates.length) return;
+  const existingFiles = await filesystem.listPaths("conversations");
+  for (const conversation of legacyCandidates) {
+    const legacy = legacyConversationBasePath(conversation.conversationId);
+    if (!existingFiles.some(path => path.startsWith(legacy + "/"))) continue;
+    const rawMarker = parseJson<{ conversationId?: string }>(await filesystem.readText(legacy + "/raw-complete.json"));
+    const completion = parseJson<{ conversationId?: string }>(await filesystem.readText(legacy + "/complete.json"));
+    const owner = rawMarker?.conversationId ?? completion?.conversationId;
+    if (typeof owner === "string" && owner !== conversation.conversationId
+      && legacyConversationBasePath(owner) === legacy) continue; // Old path belongs to a different ID; never touch it.
+    throw new Error("Legacy conversation directory requires explicit collision-safe migration before writing.");
   }
 }
 
