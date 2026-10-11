@@ -1,4 +1,4 @@
-import { graphFindings, linearRootId, parsePaginatedPage } from "./capture";
+import { assertPaginationOverlap, graphFindings, linearRootId, parsePaginatedPage } from "./capture";
 import { parseConversationDetail, type ChatGptConversationDetail } from "./envelopes";
 import { prettyJson } from "../core/serialization";
 import type { JsonObject, JsonValue } from "../core/types";
@@ -65,6 +65,7 @@ function replayPagination(raw: JsonObject, conversationId: string): void {
     identity(response, conversationId, index === 0);
     const page = parsePaginatedPage(response, index + 1);
     if (index === 0) currentNode = page.currentNode;
+    assertPaginationOverlap(chronologicalIds, page.messages.map(message => message.id));
     const freshIds: string[] = [];
     for (const message of page.messages) {
       const previous = messages.get(message.id);

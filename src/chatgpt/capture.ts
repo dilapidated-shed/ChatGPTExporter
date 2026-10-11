@@ -48,10 +48,9 @@ export class ChatGptDetailFetcher {
 
     for (let offset = 0; offset < regular.length; offset += this.batchSize) {
       const group = regular.slice(offset, offset + this.batchSize);
-      const result = await this.fetchBatch(group);
+      const result = await this.fetchBatch(group, checkpoint);
       if (result.batch) batches.push(result.batch);
       output.push(...result.conversations);
-      await checkpoint?.({ batches: result.batch ? [result.batch] : [], conversations: result.conversations });
     }
     for (const conversation of shared) {
       const retrieved = await this.fetchShared(conversation, shareIdFor(conversation)!);
@@ -67,7 +66,7 @@ export class ChatGptDetailFetcher {
     return { batches, conversations: output };
   }
 
-  private async fetchBatch(group: InventoryConversation[]): Promise<{ batch: RawBatchCapture | null; conversations: RetrievedConversationDetail[] }> {
+  private async fetchBatch(group: InventoryConversation[], checkpoint?: DetailCaptureCheckpoint): Promise<{ batch: RawBatchCapture | null; conversations: RetrievedConversationDetail[] }> {
     const requestedIds = group.map((conversation) => conversation.conversationId);
     let response: Awaited<ReturnType<ChatGptTransport["request"]>>;
     try {
@@ -78,7 +77,11 @@ export class ChatGptDetailFetcher {
     } catch (error) {
       if (!isHttpStatus(error, 404)) throw error;
       const conversations: RetrievedConversationDetail[] = [];
-      for (const conversation of group) conversations.push(await this.fetchCurrent(conversation, "batch_http_404"));
+      for (const conversation of group) {
+        const retrieved = await this.fetchCurrent(conversation, "batch_http_404");
+        conversations.push(retrieved);
+        await checkpoint?.({ batches: [], conversations: [retrieved] });
+      }
       return { batch: null, conversations };
     }
     const candidates = batchCandidates(response.body);
@@ -92,7 +95,8 @@ export class ChatGptDetailFetcher {
         parsed = parseConversationDetail(raw);
         id = parsed.id ?? parsed.conversation_id ?? null;
         if (!id || !requestedIds.includes(id)) continue;
-        if (!hasOnlySafeCompactNullRoot(raw) || graphFindings(parsed).length) issue = "batch_graph_suspicious";
+        if (hasConflictingConversationAliases(raw)) issue = "batch_invalid";
+        else if (!hasOnlySafeCompactNullRoot(raw) || graphFindings(parsed).length) issue = "batch_graph_suspicious";
       } catch (error) {
         if (!(error instanceof EnvelopeError)) throw error;
         id = looseConversationId(raw);
@@ -110,34 +114,38 @@ export class ChatGptDetailFetcher {
     const returnedIds = requestedIds.filter((id) => candidateById.has(id));
     const missingIds = requestedIds.filter((id) => !candidateById.has(id));
     const suspiciousIds = requestedIds.filter((id) => candidateById.get(id)?.issue !== undefined);
+    // The complete batch response is already available; publish it with each
+    // independently validated conversation before a later fallback can fail.
+    const batch: RawBatchCapture = {
+      requestedConversationIds: requestedIds,
+      returnedConversationIds: returnedIds,
+      missingConversationIds: missingIds,
+      suspiciousConversationIds: [...new Set([...suspiciousIds, ...duplicateIds])],
+      response: response.body,
+      responseBytes: response.responseBytes,
+      correlationId: response.correlationId,
+    };
     const conversations: RetrievedConversationDetail[] = [];
     for (const conversation of group) {
       const candidate = candidateById.get(conversation.conversationId);
+      let retrieved: RetrievedConversationDetail;
       if (!candidate || candidate.issue || !candidate.parsed) {
-        conversations.push(await this.fetchCurrent(conversation, candidate?.issue ?? "batch_missing"));
+        retrieved = await this.fetchCurrent(conversation, candidate?.issue ?? "batch_missing");
       } else {
-        conversations.push({
+        retrieved = {
           inventory: conversation,
           detail: candidate.parsed,
           raw: candidate.raw,
           source: "batch",
           correlationId: response.correlationId,
           responseBytes: response.responseBytes,
-        });
+        };
       }
+      conversations.push(retrieved);
+      // Never wait for the whole group to succeed before persisting a finished unit.
+      await checkpoint?.({ batches: [batch], conversations: [retrieved] });
     }
-    return {
-      batch: {
-        requestedConversationIds: requestedIds,
-        returnedConversationIds: returnedIds,
-        missingConversationIds: missingIds,
-        suspiciousConversationIds: [...new Set([...suspiciousIds, ...duplicateIds])],
-        response: response.body,
-        responseBytes: response.responseBytes,
-        correlationId: response.correlationId,
-      },
-      conversations,
-    };
+    return { batch, conversations };
   }
 
   private async fetchCurrent(conversation: InventoryConversation, fallbackReason: BatchFallbackReason): Promise<RetrievedConversationDetail> {
@@ -181,6 +189,7 @@ export class ChatGptDetailFetcher {
       });
       responseBytes += response.responseBytes;
 
+      assertPaginationOverlap(chronologicalIds, page.messages.map((message) => message.id));
       const freshIds: string[] = [];
       for (const message of page.messages) {
         const existing = messages.get(message.id);
@@ -304,6 +313,9 @@ export class ChatGptDetailFetcher {
   private async fetchShared(conversation: InventoryConversation, shareId: string): Promise<RetrievedConversationDetail> {
     const response = await this.transport.request({ operation: "shared_detail", parameters: { shareId } }, this.workspace.accountId, 120_000);
     const detail = parseConversationDetail(response.body);
+    if (hasConflictingConversationAliases(response.body)) {
+      throw new DetailCaptureError("DETAIL_IDENTITY_CONFLICT", "Shared conversation response contains conflicting identity aliases.");
+    }
     const findings = graphFindings(detail);
     if (findings.length) throw new DetailCaptureError("SHARED_GRAPH_INVALID", `Shared detail ${shareId} is invalid: ${findings.join(", ")}`);
     return {
@@ -419,6 +431,9 @@ export function parsePaginatedPage(value: JsonValue, pageNumber: number): Parsed
     startCursor = pageInfo.start_cursor;
   }
 
+  if (hasConflictingConversationAliases(object)) {
+    throw new DetailCaptureError("PAGINATION_IDENTITY_CONFLICT", "Paginated conversation page " + pageNumber + " contains conflicting identity aliases.");
+  }
   const identity = object.conversation_id ?? object.id;
   if (identity !== undefined && (typeof identity !== "string" || identity.length === 0)) {
     throw new DetailCaptureError("PAGINATION_INVALID_IDENTITY", `Paginated conversation page ${pageNumber} conversation identity is invalid.`);
@@ -434,6 +449,27 @@ export function parsePaginatedPage(value: JsonValue, pageNumber: number): Parsed
     hasPreviousPage: pageInfo.has_previous_page,
     startCursor,
   };
+}
+
+/** Check all relative order constraints from already fetched newer pages. */
+export function assertPaginationOverlap(knownChronologicalIds: readonly string[], olderPageIds: readonly string[]): void {
+  const index = new Map(knownChronologicalIds.map((id, position) => [id, position]));
+  let lastSeen = -1;
+  let encounteredKnown = false;
+  for (const id of olderPageIds) {
+    const position = index.get(id);
+    if (position === undefined) {
+      if (encounteredKnown) {
+        throw new DetailCaptureError("PAGINATION_ORDER_CONFLICT", "An older page introduced a new message after a previously retrieved message.");
+      }
+      continue;
+    }
+    encounteredKnown = true;
+    if (position <= lastSeen) {
+      throw new DetailCaptureError("PAGINATION_ORDER_CONFLICT", "Overlapping messages disagree on their relative chronological order.");
+    }
+    lastSeen = position;
+  }
 }
 
 function assertPaginatedIdentity(requestedId: string, returnedId: string | null, required: boolean): void {
@@ -474,6 +510,12 @@ function isHttpStatus(error: unknown, status: number): boolean {
   return Boolean(error && typeof error === "object" && "status" in error && (error as { status?: unknown }).status === status);
 }
 
+function hasConflictingConversationAliases(value: JsonValue): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const object = value as Record<string, JsonValue>;
+  return object.id !== undefined && object.conversation_id !== undefined && object.id !== object.conversation_id;
+}
+
 function looseConversationId(value: JsonValue): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const object = value as Record<string, JsonValue>;
@@ -484,6 +526,9 @@ function looseConversationId(value: JsonValue): string | null {
 }
 
 function assertRequestedIdentity(requestedId: string, detail: ChatGptConversationDetail): void {
+  if (detail.id && detail.conversation_id && detail.id !== detail.conversation_id) {
+    throw new DetailCaptureError("DETAIL_IDENTITY_CONFLICT", "Legacy conversation response contains conflicting identity aliases.");
+  }
   const returnedId = detail.id ?? detail.conversation_id;
   if (returnedId !== requestedId) throw new DetailCaptureError("DETAIL_ID_MISMATCH", `Requested ${requestedId} but ChatGPT returned ${returnedId ?? "no id"}.`);
 }

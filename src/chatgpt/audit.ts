@@ -69,8 +69,8 @@ export async function auditArchive(options: {
   if (inventoryEvidence.coverage === "legacy_unverified") findings.push({ severity: "warning", code: "INVENTORY_LEGACY_UNVERIFIED", message: "Legacy inventory has no page receipts; authoritative listing coverage is unverified." });
   const conversationCoverage: ArchiveAuditReport["conversationCoverage"] = [];
   const allPaths = await filesystem.listPaths();
-  const completionPaths = allPaths.filter((path) => /^conversations\/[^/]+\/complete\.json$/.test(path));
-  const normalizedPaths = allPaths.filter((path) => /^conversations\/[^/]+\/conversation\.json$/.test(path));
+  const completionPaths = allPaths.filter((path) => path.startsWith("conversations/") && path.endsWith("/complete.json"));
+  const normalizedPaths = allPaths.filter((path) => path.startsWith("conversations/") && path.endsWith("/conversation.json"));
   const expectedIds = inventory.conversations.map((item) => item.conversationId).sort();
   const expectedPathById = new Map(inventory.conversations.map((item) => [item.conversationId, `${conversationBasePath(item.conversationId)}/complete.json`]));
   const completionIds: string[] = [];
