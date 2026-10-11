@@ -108,7 +108,7 @@ describe("X3 D08 identity aliases", () => {
   it("rejects conflicting legacy singular and shared aliases", async () => {
     const t = transport(op => {
       if (op.operation === "conversation_detail" || op.operation === "shared_detail") {
-        return { ...conversationDetail(), conversation_id: "other" };
+        return { ...conversationDetail(), conversation_id: "other" } as any;
       }
       throw http(404);
     });
