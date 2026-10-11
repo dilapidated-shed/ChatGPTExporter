@@ -73,12 +73,15 @@ export class ChatGptInventoryEngine {
     if (this.options.settings.includeProjects) await this.captureProjects();
     if (this.options.settings.includeShared) await this.captureShared();
 
+    const traversalComplete = this.chains.every((item) => item.complete && item.terminationReason !== null);
+    const offsetInstability = this.chains.some((item) => item.offsetInstability === true);
     const inventory: ConversationInventory = {
       schemaVersion: 1,
       provider: "chatgpt-web",
       workspaceFingerprint: this.options.workspace.workspaceFingerprint,
       generatedAt: this.now().toISOString(),
-      complete: this.chains.every((chain) => chain.complete),
+      complete: traversalComplete && !offsetInstability,
+      discovery: { traversalComplete, providerSnapshot: "unverified", offsetInstability },
       evidenceModel: "page_receipts_v1",
       chains: [...this.chains],
       pages: [...this.pages],
@@ -86,7 +89,9 @@ export class ChatGptInventoryEngine {
       absentConversations: retainedAbsent(previous, this.conversations),
       conversations: [...this.conversations.values()].sort((left, right) => left.logicalKey.localeCompare(right.logicalKey)),
     };
-    if (!inventory.complete) throw new InventoryError("INVENTORY_INCOMPLETE", "Not every inventory chain terminated normally.");
+    // Preserve observed records even when a normally terminated offset traversal
+    // exposed movement. Consumers must not treat that inventory as complete.
+    if (!traversalComplete) throw new InventoryError("INVENTORY_INCOMPLETE", "Not every inventory chain terminated normally.");
     if (previous) {
       const previousText = prettyJson(previous);
       const previousHash = await sha256Hex(previousText);
@@ -100,10 +105,15 @@ export class ChatGptInventoryEngine {
       workspaceFingerprint: this.options.workspace.workspaceFingerprint,
       inventoryHash: await hashJson(JSON.parse(JSON.stringify(inventory)) as JsonValue),
       expectedConversationCount: inventory.conversations.length,
+      observedConversationCount: inventory.conversations.length,
+      unobservedPreviousConversationCount: inventory.absentConversations?.length ?? 0,
       absentRetainedConversationCount: inventory.absentConversations?.length ?? 0,
+      discovery: inventory.discovery,
+      reportedTotals: "hints_only",
+      captureEligible: inventory.complete,
       pageEvidenceCount: inventory.pages.length,
       aggregateResponseBytes: this.aggregateBytes,
-      allChainsComplete: inventory.chains.every((item) => item.complete && item.terminationReason !== null),
+      allChainsComplete: traversalComplete,
       conversationCountsByScope: Object.fromEntries((["main", "archived", "project", "shared"] as const).map((scope) => [
         scope,
         inventory.conversations.filter((conversation) => conversation.memberships.some((membership) => membership.scope === scope)).length,
@@ -115,6 +125,7 @@ export class ChatGptInventoryEngine {
         itemCount: item.itemCount,
         uniqueConversationCount: item.uniqueConversationCount,
         terminationReason: item.terminationReason,
+        ...(item.offsetInstability === undefined ? {} : { offsetInstability: item.offsetInstability }),
       })),
     }));
     return inventory;
@@ -125,6 +136,8 @@ export class ChatGptInventoryEngine {
     const seenOrderedHashes = new Set<string>();
     let offset = 0;
     let totalItems = 0;
+    let lastReportedTotal: number | null = null;
+    let offsetInstability = false;
 
     for (let pageNumber = 1; pageNumber <= this.options.settings.maxPagesPerChain; pageNumber += 1) {
       const operation = {
@@ -137,6 +150,7 @@ export class ChatGptInventoryEngine {
       const total = nullableTotal(object.total, `${scope} page.total`);
       const ids = items.map((item, index) => requiredId(item, `${scope} page item ${index}`));
       const duplicateCount = ids.filter((id) => seenIds.has(id)).length;
+      if (duplicateCount > 0 || new Set(ids).size !== ids.length) offsetInstability = true;
       const orderedIdHash = await hashIds(ids);
       if (ids.length && seenOrderedHashes.has(orderedIdHash)) {
         throw new InventoryError("INVENTORY_REPEATED_PAGE", `${scope} history repeated an ordered page at offset ${offset}.`);
@@ -149,18 +163,26 @@ export class ChatGptInventoryEngine {
       }
       totalItems += items.length;
       const nextOffset = offset + items.length;
+      if (total !== null) {
+        if ((lastReportedTotal !== null && lastReportedTotal !== total) || total < nextOffset) offsetInstability = true;
+        lastReportedTotal = total;
+      }
       let termination: ScopeTermination | null = null;
       if (items.length === 0) {
-        if (total === 0 && offset === 0) termination = "recognized_empty_account";
-        else if (total === null || offset >= total) termination = "empty_page";
-        else throw new InventoryError("INVENTORY_PREMATURE_EMPTY_PAGE", `${scope} history returned an empty page at ${offset} before declared total ${total}.`);
-      } else if (total !== null && nextOffset >= total) {
-        termination = "declared_total_reached";
+        if (total !== null && offset < total) {
+          if (offset === 0) throw new InventoryError("INVENTORY_PREMATURE_EMPTY_PAGE", `${scope} history returned empty at zero but reported ${total} items.`);
+          offsetInstability = true;
+        }
+        termination = total === 0 && offset === 0 ? "recognized_empty_account" : "empty_page";
+      } else if (items.length < this.options.settings.pageSize && total !== null && nextOffset >= total) {
+        // A count hint alone never terminates a full page. Short-page termination
+        // is an observed traversal boundary, not proof of a stable snapshot.
+        termination = "short_page";
       }
       await this.recordPage(scope, chainId, pageNumber, { offset, limit: this.options.settings.pageSize }, null, items.length, response.responseBytes, response.body, orderedIdHash, duplicateCount, termination);
       this.report(scope, chainId, pageNumber);
       if (termination) {
-        this.chains.push(chain(chainId, scope, pageNumber, totalItems, seenIds.size, termination));
+        this.chains.push({ ...chain(chainId, scope, pageNumber, totalItems, seenIds.size, termination), offsetInstability });
         return;
       }
       if (nextOffset <= offset) throw new InventoryError("INVENTORY_OFFSET_STALL", `${scope} history offset did not advance.`);
@@ -250,6 +272,8 @@ export class ChatGptInventoryEngine {
     const seenOrderedHashes = new Set<string>();
     let offset = 0;
     let totalItems = 0;
+    let lastReportedTotal: number | null = null;
+    let offsetInstability = false;
 
     for (let pageNumber = 1; pageNumber <= this.options.settings.maxPagesPerChain; pageNumber += 1) {
       const response = await this.request({ operation: "shared_page", parameters: { offset, limit: this.options.settings.pageSize } });
@@ -258,6 +282,7 @@ export class ChatGptInventoryEngine {
       const total = nullableTotal(object.total, "shared page.total");
       const shareIds = items.map((item, index) => requiredId(item, `shared page item ${index}`));
       const duplicateCount = shareIds.filter((id) => seenShareIds.has(id)).length;
+      if (duplicateCount > 0 || new Set(shareIds).size !== shareIds.length) offsetInstability = true;
       const orderedIdHash = await hashIds(shareIds);
       if (shareIds.length && seenOrderedHashes.has(orderedIdHash)) throw new InventoryError("INVENTORY_REPEATED_PAGE", `Shared history repeated an ordered page at offset ${offset}.`);
       if (shareIds.length) seenOrderedHashes.add(orderedIdHash);
@@ -269,16 +294,24 @@ export class ChatGptInventoryEngine {
       }
       totalItems += items.length;
       const nextOffset = offset + items.length;
+      if (total !== null) {
+        if ((lastReportedTotal !== null && lastReportedTotal !== total) || total < nextOffset) offsetInstability = true;
+        lastReportedTotal = total;
+      }
       let termination: ScopeTermination | null = null;
       if (items.length === 0) {
-        if (total !== null && offset < total) throw new InventoryError("INVENTORY_PREMATURE_EMPTY_PAGE", `Shared history returned an empty page at ${offset} before declared total ${total}.`);
+        if (total !== null && offset < total) {
+          if (offset === 0) throw new InventoryError("INVENTORY_PREMATURE_EMPTY_PAGE", `Shared history returned empty at zero but reported ${total} items.`);
+          offsetInstability = true;
+        }
         termination = total === 0 && offset === 0 ? "recognized_empty_account" : "empty_page";
+      } else if (items.length < this.options.settings.pageSize && total !== null && nextOffset >= total) {
+        termination = "short_page";
       }
-      else if (total !== null && nextOffset >= total) termination = "declared_total_reached";
       await this.recordPage("shared", chainId, pageNumber, { offset, limit: this.options.settings.pageSize }, null, items.length, response.responseBytes, response.body, orderedIdHash, duplicateCount, termination);
       this.report("shared", chainId, pageNumber);
       if (termination) {
-        this.chains.push(chain(chainId, "shared", pageNumber, totalItems, seenShareIds.size, termination));
+        this.chains.push({ ...chain(chainId, "shared", pageNumber, totalItems, seenShareIds.size, termination), offsetInstability });
         return;
       }
       if (nextOffset <= offset) throw new InventoryError("INVENTORY_OFFSET_STALL", "Shared history offset did not advance.");
@@ -488,7 +521,7 @@ function parsePreviousInventory(value: string | undefined, workspaceFingerprint:
     return parsed.schemaVersion === 1
       && parsed.provider === "chatgpt-web"
       && parsed.workspaceFingerprint === workspaceFingerprint
-      && parsed.complete
+      && (parsed.complete || parsed.discovery?.traversalComplete === true)
       && Array.isArray(parsed.conversations)
       ? parsed
       : undefined;

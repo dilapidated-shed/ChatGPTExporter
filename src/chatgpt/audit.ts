@@ -47,6 +47,7 @@ export interface ArchiveAuditReport {
   conversationsIndexHash: string;
   assetsIndexHash: string;
   inventoryCoverage: "page_receipts" | "legacy_unverified";
+  inventoryDiscovery: { traversalComplete: boolean; providerSnapshot: "unverified"; offsetInstability: boolean };
   conversationCoverage: Array<{ conversationId: string; coverage: ConversationCoverage }>;
   providerGraphCoverage: "unknown";
   versionCoverage: "unknown";
@@ -60,10 +61,12 @@ export async function auditArchive(options: {
 }): Promise<ArchiveAuditReport> {
   const { filesystem } = options;
   const inventory = parseJson<ConversationInventory>(await filesystem.readText("inventory.json"));
-  if (!inventory || inventory.schemaVersion !== 1 || inventory.provider !== "chatgpt-web" || !inventory.complete) {
-    throw new Error("A complete ChatGPT inventory is required for archive audit.");
+  if (!inventory || inventory.schemaVersion !== 1 || inventory.provider !== "chatgpt-web"
+    || (!inventory.complete && inventory.discovery?.traversalComplete !== true)) {
+    throw new Error("An observed, normally terminated ChatGPT inventory is required for archive audit.");
   }
   const findings: ArchiveAuditFinding[] = [];
+  if (!inventory.complete) findings.push(error("INVENTORY_OFFSET_INSTABILITY", "Observed offset movement or inconsistent provider total hints; inventory cannot certify complete discovery.", "inventory.json"));
   const inventoryEvidence = await validateInventoryEvidence(filesystem, inventory);
   for (const message of inventoryEvidence.errors) findings.push(error("INVENTORY_EVIDENCE_INVALID", message, "inventory.json"));
   if (inventoryEvidence.coverage === "legacy_unverified") findings.push({ severity: "warning", code: "INVENTORY_LEGACY_UNVERIFIED", message: "Legacy inventory has no page receipts; authoritative listing coverage is unverified." });
@@ -277,6 +280,7 @@ export async function auditArchive(options: {
     conversationsIndexHash: await sha256Hex(conversationsIndexText),
     assetsIndexHash: await sha256Hex(assetsIndexText),
     inventoryCoverage: inventoryEvidence.coverage,
+    inventoryDiscovery: inventory.discovery ?? { traversalComplete: inventory.complete, providerSnapshot: "unverified", offsetInstability: false },
     conversationCoverage,
     providerGraphCoverage: "unknown",
     versionCoverage: "unknown",
@@ -450,6 +454,8 @@ function renderValidation(report: ArchiveAuditReport): string {
     "",
     `Terminal state: **${report.terminalState}**`,
     `Inventory evidence: **${report.inventoryCoverage}**`,
+    `Inventory traversal terminated: **${report.inventoryDiscovery.traversalComplete}**; offset instability observed: **${report.inventoryDiscovery.offsetInstability}**.`,
+    "Provider account snapshot coverage: **unverified** (reported totals are hints, not proof).",
     "Provider graph coverage: **unknown**; version coverage: **unknown**.",
     "Completeness applies to the validated returned graph or current branch, not an exhaustive provider export.",
     "",
