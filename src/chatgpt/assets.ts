@@ -121,11 +121,12 @@ export class ChatGptAssetManager {
   ): Promise<AssetRecord[]> {
     const assets: AssetRecord[] = [];
     let aggregateBytes = 0;
-    const previous = new Map((previouslyCaptured ?? []).map(asset => [asset.logicalId, asset]));
-    // Duplicate logical IDs are not allowed to bypass identity checks.
+    const previous = new Map<string, AssetRecord>();
     const duplicates = new Set<string>();
+    // One scan; a duplicated logical identity is never eligible for reuse.
     for (const asset of previouslyCaptured ?? []) {
-      if (previouslyCaptured?.filter(candidate => candidate.logicalId === asset.logicalId).length !== 1) duplicates.add(asset.logicalId);
+      if (previous.has(asset.logicalId)) duplicates.add(asset.logicalId);
+      else previous.set(asset.logicalId, asset);
     }
     for (const descriptor of descriptors) {
       try {

@@ -9,6 +9,7 @@ import { prettyJson } from "../../src/core/serialization";
 import type { AssetRecord, ConversationInventory, InventoryProject, JsonValue } from "../../src/core/types";
 import { BRIDGE_PROTOCOL_VERSION, type ApiSuccessResponse } from "../../src/extension/protocol";
 import { conversationDetail } from "../fixtures/chatgpt";
+import { filesystem as historyFilesystem, history, pagesTransport } from "../fixtures/adversarial";
 
 const workspace: DiscoveredWorkspace = {
   accountId: "synthetic-account", workspaceFingerprint: "a".repeat(32),
@@ -199,6 +200,33 @@ describe("X5 physical conversation asset resume", () => {
     expect(await verifyPhysicalAsset(fs, { ...asset!, relativePath: "../../assets/" + "f".repeat(64) + ".txt" })).toBe(false);
     expect(await verifyPhysicalAsset(fs, { ...asset!, sha256: "f".repeat(64) })).toBe(false);
     expect(await verifyPhysicalAsset(fs, { ...asset!, byteSize: 0 })).toBe(false);
+  });
+});
+
+describe("X5 original D11 adversarial regression", () => {
+  it("repairs missing physical assets from a paginated older message without any provider request", async () => {
+    const fs = await historyFilesystem();
+    const pages = history(6, 2, 1);
+    for (const page of pages) for (const message of page.messages) {
+      if (message.id === "m-00000" || message.id === "m-00002") {
+        message.content = {
+          content_type: "multimodal_text",
+          parts: [{ content_type: "file", asset_pointer: "data:text/plain;base64,c3ludGhldGlj" }],
+        };
+      }
+    }
+    await run(fs, pagesTransport(pages), "original-d11");
+    const previous = await assets(fs);
+    expect(previous).toHaveLength(2);
+    expect((await fs.listPaths("assets")).length).toBe(1);
+    for (const path of await fs.listPaths("assets")) await fs.remove(path);
+
+    const disconnected = offline();
+    const result = await run(fs, disconnected, "original-d11-repair");
+    expect(result).toMatchObject({ rebuiltCount: 1, capturedCount: 0, partialAssetCount: 0 });
+    expect((await fs.listPaths("assets")).length).toBe(1);
+    expect(disconnected.request).not.toHaveBeenCalled();
+    expect((await auditArchive({ filesystem: fs, extensionVersion: "synthetic" })).terminalState).toBe("complete");
   });
 });
 
