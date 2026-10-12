@@ -481,7 +481,7 @@ export function assertPaginationOverlap(
   const index = Array.isArray(knownChronologicalIds)
     ? new Map<string, number>(knownChronologicalIds.map((id, position): [string, number] => [id, position]))
     : knownChronologicalIds as ReadonlyMap<string, number>;
-  let lastSeen = -1;
+  let lastSeen = Number.NEGATIVE_INFINITY;
   let encounteredKnown = false;
   for (const id of olderPageIds) {
     const position = index.get(id);

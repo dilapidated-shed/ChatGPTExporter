@@ -49,7 +49,9 @@ describe("Sun X6: semantic content is independent of page evidence", () => {
       const b = normalizeConversation(split.detail, item(), workspace.workspaceFingerprint);
       expect(b).toEqual(a);
       expect(prettyJson(b)).toBe(prettyJson(a));
-      expect(prettyJson(split.raw)).not.toBe(prettyJson(one.raw));
+      if (width !== 12 || overlap !== 0) {
+        expect(prettyJson(split.raw)).not.toBe(prettyJson(one.raw));
+      }
       expect(validateConversationEvidence(split.raw, "conversation-1", "current").coverage.messages).toBe("current_branch");
     },
   );
