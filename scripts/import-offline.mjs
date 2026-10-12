@@ -17,7 +17,7 @@ import { build } from "esbuild";
 import { unzipSync } from "fflate";
 
 const exec = promisify(execFile);
-const projectRoot = fileURLToPath(new URL("../", import.meta.url));
+const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const MAX_ALLOWED_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 const ID = /^[A-Za-z0-9_-]{1,256}$/;

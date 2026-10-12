@@ -159,6 +159,15 @@ describe("offline importer local, Drive and GitHub source adapters", () => {
     expect(result.stderr).toMatch(/Duplicate/);
   }));
 
+  it("refuses to place private archives inside the public source checkout", async () => inTemp(async root => {
+    const input = path.join(root, "existing.json");
+    await writeFile(input, JSON.stringify([sample()]));
+    const destination = path.join(repo, "PRIVATE_EXPORT_MUST_NOT_BE_CREATED");
+    const result = execute(["--file", input, "--output", destination]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/must not be saved/);
+  }));
+
   it("refuses oversized inputs and unsafe GitHub paths before running any command", async () => inTemp(async root => {
     const input = path.join(root, "source.json");
     await writeFile(input, JSON.stringify([sample()]));
