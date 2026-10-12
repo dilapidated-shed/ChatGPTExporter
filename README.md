@@ -21,7 +21,7 @@ This is an independent community project and is not affiliated with or endorsed 
 Requirements are Node.js 20+ and a Chromium browser that supports Manifest V3 and the File System Access API.
 
 ```sh
-git clone https://github.com/siraht/ChatGPTExporter.git
+git clone https://github.com/dilapidated-shed/ChatGPTExporter.git
 cd ChatGPTExporter
 npm ci
 npm run check
@@ -30,6 +30,52 @@ npm run build
 ```
 
 Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `dist/extension`. Click the extension icon to open its dashboard.
+
+## Import existing ChatGPT exports without a ChatGPT session
+
+This is a separate, offline **file import** mode. It can read a ChatGPT
+\`conversations.json\` file or a ZIP containing \`conversations.json\` (including
+numbered \`conversations_0001.json\` members). The source may be a local
+file, a **stored file on Google Drive**, or a file in a **GitHub repository**.
+
+It does not access ChatGPT's private web APIs or require a ChatGPT browser tab.
+**The chosen source must already contain the conversations.** Memory Cane's
+project/context notes are not themselves a full ChatGPT conversation export.
+
+After \`npm ci\`, using a checked-out version containing the offline importer:
+
+\`\`\`sh
+npm run import:offline -- --file /private/chatgpt-export.zip --output /private/chatgpt-import
+npm run import:offline -- --drive-id DRIVE_FILE_ID --output /private/chatgpt-import-drive
+npm run import:offline -- --github-repo OWNER/PRIVATE_REPO --github-path exports/conversations.json --github-ref main --output /private/chatgpt-import-github
+\`\`\`
+
+The Drive route calls your **locally authorized**
+\`google-drive-files download FILE_ID\` from
+[\`dilapidated-shed/cloud-storage-api\`](https://github.com/dilapidated-shed/cloud-storage-api).
+The GitHub route calls your locally authorized \`gh api\` for the named
+repository file. Both are read-only source operations; credentials remain
+in their respective CLIs, and this importer does not accept or log tokens.
+
+Output goes **only** to a new, explicitly named local directory outside the
+source repository, with original source bytes, per-conversation raw
+revisions, deterministic JSON/Markdown, and
+\`reports/offline-import.json\`. An existing output directory is refused
+rather than overwritten. Files are staged privately and only published after
+the entire supplied input has been validated.
+
+The receipt explicitly records \`providerSnapshot: "unknown"\`,
+\`scope: "only_records_in_supplied_file"\`, \`chatgptSessionUsed: false\`,
+and \`assetCoverage: "not_imported"\`. This mode does not create a
+**live-export completion marker**. It preserves the original ZIP, but this
+initial importer does **not** extract or fetch ZIP attachment binaries.
+
+The first bounded implementation accepts up to **64 MiB** of input and
+extracted conversation JSON by default; \`--max-bytes\` can raise this to
+256 MiB. Oversized inputs fail explicitly. Very large multi-gigabyte exports
+will require a subsequent streaming import path rather than a silent truncated
+archive. A Drive/GitHub file containing ordinary notes rather than the
+ChatGPT conversation graph schema will be rejected, not mislabeled as history.
 
 ## Export your history
 
