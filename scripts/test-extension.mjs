@@ -328,7 +328,31 @@ try {
   assert(conversationListingRequests === listingRequestsBeforeInventory + 1, "Pause allowed the next inventory request to start.");
   await dashboard.locator("#resume-run:not([disabled])").click();
   await dashboard.locator("#confirm-inventory:not([disabled])").waitFor();
-  assert((await dashboard.locator("#inventory-summary").textContent())?.includes("2 conversations"), "Dashboard inventory summary did not reconcile two conversations.");
+  const observedInventory = await dashboard.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const archives = [];
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind === "directory" && name.startsWith("ChatGPTExport-")) archives.push(handle);
+    }
+    if (archives.length !== 1) throw new Error("Expected one synthetic workspace archive.");
+    const inventoryHandle = await archives[0].getFileHandle("inventory.json");
+    const inventory = JSON.parse(await (await inventoryHandle.getFile()).text());
+    return {
+      ids: inventory.conversations.map((record) => record.conversationId).sort(),
+      complete: inventory.complete,
+      traversalComplete: inventory.discovery?.traversalComplete,
+      providerSnapshot: inventory.discovery?.providerSnapshot,
+      offsetInstability: inventory.discovery?.offsetInstability,
+    };
+  });
+  assert(JSON.stringify(observedInventory.ids) === JSON.stringify(["conversation-1", "conversation-2"])
+    && observedInventory.complete === true
+    && observedInventory.traversalComplete === true
+    && observedInventory.providerSnapshot === "unverified"
+    && observedInventory.offsetInstability === false,
+    "Persisted synthetic inventory did not reconcile exact IDs and honest provider coverage.");
+  assert((await dashboard.locator("#inventory-summary").textContent())?.includes("2 observed conversations"),
+    "Dashboard did not accurately label the two observed conversations.");
   await dashboard.locator("#confirm-inventory").click();
 
   await dashboard.locator("#scope-account").uncheck();
