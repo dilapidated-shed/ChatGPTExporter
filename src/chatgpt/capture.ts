@@ -165,7 +165,11 @@ export class ChatGptDetailFetcher {
     const initial = jsonObject(initialResponse.body, "paginated conversation initial response");
     const pages: JsonValue[] = [];
     const messages = new Map<string, JsonValue>();
-    let chronologicalIds: string[] = [];
+    // Process pages newest first without copying the accumulated history for
+    // each new page. Ordinals represent the order, independent of page width.
+    const chronologicalGroups: string[][] = [];
+    const ordinalById = new Map<string, number>();
+    let oldestOrdinal = 0;
     const seenCursors = new Set<string>();
     let currentNode: string | null | undefined;
     let responseBytes = 0;
@@ -189,7 +193,7 @@ export class ChatGptDetailFetcher {
       });
       responseBytes += response.responseBytes;
 
-      assertPaginationOverlap(chronologicalIds, page.messages.map((message) => message.id));
+      assertPaginationOverlap(ordinalById, page.messages.map((message) => message.id));
       const freshIds: string[] = [];
       for (const message of page.messages) {
         const existing = messages.get(message.id);
@@ -202,7 +206,10 @@ export class ChatGptDetailFetcher {
         messages.set(message.id, message.raw);
         freshIds.push(message.id);
       }
-      chronologicalIds = [...freshIds, ...chronologicalIds];
+      for (let position = freshIds.length - 1; position >= 0; position -= 1) {
+        ordinalById.set(freshIds[position]!, --oldestOrdinal);
+      }
+      chronologicalGroups.push(freshIds);
 
       if (!page.hasPreviousPage) {
         complete = true;
@@ -226,6 +233,7 @@ export class ChatGptDetailFetcher {
     if (!complete) {
       throw new DetailCaptureError("PAGINATION_PAGE_LIMIT", `Conversation ${conversation.conversationId} exceeded the pagination page limit.`);
     }
+    const chronologicalIds = chronologicalGroups.reverse().flat();
     if (chronologicalIds.length === 0) {
       throw new DetailCaptureError("PAGINATION_EMPTY", `Conversation ${conversation.conversationId} returned no messages.`);
     }
@@ -329,27 +337,41 @@ export class ChatGptDetailFetcher {
   }
 }
 
+/**
+ * Diagnose graph structure in bounded linear work. A chain leading to a
+ * previously inspected root/cycle is not repeatedly traversed.
+ *
+ * The iterative walk avoids JS recursion-depth failures on long histories.
+ */
 export function graphFindings(detail: ChatGptConversationDetail): string[] {
   const findings: string[] = [];
   const nodes = detail.mapping;
   const ids = new Set(Object.keys(nodes));
+  const parentById = new Map<string, string | null>();
   if (ids.size === 0) findings.push("mapping_empty");
   if (detail.current_node && !ids.has(detail.current_node)) findings.push("current_node_missing");
   for (const [id, node] of Object.entries(nodes)) {
-    if (node.parent !== null && !ids.has(node.parent)) findings.push(`parent_missing:${id}`);
+    const parent = node.parent;
+    parentById.set(id, parent);
+    if (parent !== null && !ids.has(parent)) findings.push(`parent_missing:${id}`);
     for (const child of node.children) if (!ids.has(child)) findings.push(`child_missing:${id}`);
   }
+  const completed = new Set<string>();
   for (const start of ids) {
-    const seen = new Set<string>();
+    if (completed.has(start)) continue;
+    const visiting = new Set<string>();
+    const traversed: string[] = [];
     let current: string | null = start;
-    while (current !== null) {
-      if (seen.has(current)) {
-        findings.push(`cycle:${start}`);
+    while (current !== null && ids.has(current) && !completed.has(current)) {
+      if (visiting.has(current)) {
+        findings.push(`cycle:${current}`);
         break;
       }
-      seen.add(current);
-      current = nodes[current]?.parent ?? null;
+      visiting.add(current);
+      traversed.push(current);
+      current = parentById.get(current) ?? null;
     }
+    for (const nodeId of traversed) completed.add(nodeId);
   }
   return [...new Set(findings)].sort();
 }
@@ -452,8 +474,13 @@ export function parsePaginatedPage(value: JsonValue, pageNumber: number): Parsed
 }
 
 /** Check all relative order constraints from already fetched newer pages. */
-export function assertPaginationOverlap(knownChronologicalIds: readonly string[], olderPageIds: readonly string[]): void {
-  const index = new Map(knownChronologicalIds.map((id, position) => [id, position]));
+export function assertPaginationOverlap(
+  knownChronologicalIds: readonly string[] | ReadonlyMap<string, number>,
+  olderPageIds: readonly string[],
+): void {
+  const index = Array.isArray(knownChronologicalIds)
+    ? new Map<string, number>(knownChronologicalIds.map((id, position): [string, number] => [id, position]))
+    : knownChronologicalIds as ReadonlyMap<string, number>;
   let lastSeen = -1;
   let encounteredKnown = false;
   for (const id of olderPageIds) {
