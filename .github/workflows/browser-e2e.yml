@@ -1,0 +1,25 @@
+name: browser-e2e
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-chromium-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Only synthetic HTTPS fixtures; never require ChatGPT/Drive credentials.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e

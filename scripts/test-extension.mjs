@@ -71,16 +71,22 @@ const server = https.createServer({
     }
     const authorized = request.headers.authorization === "Bearer synthetic-page-local-secret"
       && request.headers["x-authorization"] === "Bearer synthetic-page-local-secret";
+    // X4 requests one more page after a full page, even if the provider's
+    // count hint was reached. The synthetic server must obey offset/limit
+    // rather than repeating the first page and inventing movement.
+    const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
+    const limit = Number(requestUrl.searchParams.get("limit") ?? 100);
+    const conversations = [
+      { id: "conversation-1", title: "Synthetic one", create_time: 1, update_time: 2 },
+      { id: "conversation-2", title: "Synthetic two", create_time: 3, update_time: 4 },
+    ];
     setTimeout(() => {
       response.writeHead(authorized ? 200 : 401, { "Content-Type": "application/json" });
       response.end(JSON.stringify(authorized ? {
-        items: [
-          { id: "conversation-1", title: "Synthetic one", create_time: 1, update_time: 2 },
-          { id: "conversation-2", title: "Synthetic two", create_time: 3, update_time: 4 },
-        ],
-        total: 2,
-        offset: Number(requestUrl.searchParams.get("offset") ?? 0),
-        limit: Number(requestUrl.searchParams.get("limit") ?? 100),
+        items: conversations.slice(offset, offset + limit),
+        total: conversations.length,
+        offset,
+        limit,
       } : { error: "fixture rejected request" }));
     }, 75);
     return;
