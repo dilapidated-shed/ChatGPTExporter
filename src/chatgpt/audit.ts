@@ -8,7 +8,7 @@ import { parseJson, prettyJson } from "../core/serialization";
 import { validateConversationEvidence, type ConversationCoverage, type ValidatedConversationEvidence } from "./evidence";
 import { validateInventoryEvidence } from "./inventory-evidence";
 import { assetReferenceFindings } from "./assets";
-import { normalizeConversation, linkNormalizedAssets } from "./normalize";
+import { normalizeConversation, linkNormalizedAssets, comparableLegacyNormalized } from "./normalize";
 import type {
   ArchiveManifest,
   AssetRecord,
@@ -355,15 +355,18 @@ async function verifyRawGraph(
   const rebuilt = normalizeConversation(raw, sourceInventory, rawMarker.workspaceFingerprint);
   const assets = parseJson<ConversationAssetIndex>(await filesystem.readText(`${conversationBasePath(rawMarker.conversationId)}/assets.json`));
   if (assets && Array.isArray(assets.assets)) linkNormalizedAssets(rebuilt, assets.assets);
+  // Legacy v1 files embedded page evidence in canonical output; compare their
+  // semantic fields only after verifying pagination bytes against raw evidence.
+  const comparableStored = comparableLegacyNormalized(normalized, raw);
   // Valid legacy derived files predate explicit coverage fields.
-  if (normalized.coverage === undefined) delete rebuilt.coverage;
+  if (comparableStored.coverage === undefined) delete rebuilt.coverage;
   const assetReferencesValid = assets && Array.isArray(assets.assets)
     && !(await assetReferenceFindings(raw, assets, rawMarker.conversationId)).length;
   // Broken asset indexes must not turn intact message content into graph failure.
   const comparable = (value: NormalizedConversation) => assetReferencesValid ? value : {
     ...value, messages: value.messages.map(message => ({ ...message, parts: message.parts.map(({ assetPath: _assetPath, ...part }) => part) })),
   };
-  if (prettyJson(comparable(rebuilt)) !== prettyJson(comparable(normalized))) findings.push(error("GRAPH_CONTENT_MISMATCH", "Normalized content differs from independent raw reconstruction.", rawMarker.detailPath));
+  if (prettyJson(comparable(rebuilt)) !== prettyJson(comparable(comparableStored))) findings.push(error("GRAPH_CONTENT_MISMATCH", "Normalized content differs from independent raw reconstruction.", rawMarker.detailPath));
   if (normalized.coverage && prettyJson(normalized.coverage) !== prettyJson(evidence.coverage)) findings.push(error("GRAPH_COVERAGE_MISMATCH", "Normalized coverage disagrees with retained evidence.", rawMarker.detailPath));
   return evidence;
 }

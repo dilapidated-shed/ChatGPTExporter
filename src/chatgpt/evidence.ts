@@ -51,7 +51,9 @@ function replayPagination(raw: JsonObject, conversationId: string): void {
   if (evidence.schema_version !== 1 || evidence.complete !== true || !Array.isArray(evidence.pages)
     || evidence.pages.length < 1 || evidence.pages.length > 10_000 || evidence.page_count !== evidence.pages.length) fail("page count");
   const messages = new Map<string, JsonValue>();
-  let chronologicalIds: string[] = [];
+  const chronologicalGroups: string[][] = [];
+  const ordinalById = new Map<string, number>();
+  let oldestOrdinal = 0;
   let expectedBefore: string | null = null;
   let currentNode: string | null | undefined;
   const cursors = new Set<string>();
@@ -65,7 +67,7 @@ function replayPagination(raw: JsonObject, conversationId: string): void {
     identity(response, conversationId, index === 0);
     const page = parsePaginatedPage(response, index + 1);
     if (index === 0) currentNode = page.currentNode;
-    assertPaginationOverlap(chronologicalIds, page.messages.map(message => message.id));
+    assertPaginationOverlap(ordinalById, page.messages.map(message => message.id));
     const freshIds: string[] = [];
     for (const message of page.messages) {
       const previous = messages.get(message.id);
@@ -76,7 +78,10 @@ function replayPagination(raw: JsonObject, conversationId: string): void {
         freshIds.push(message.id);
       }
     }
-    chronologicalIds = [...freshIds, ...chronologicalIds];
+    for (let position = freshIds.length - 1; position >= 0; position -= 1) {
+      ordinalById.set(freshIds[position]!, --oldestOrdinal);
+    }
+    chronologicalGroups.push(freshIds);
     if (page.hasPreviousPage) {
       const cursor = page.startCursor;
       if (cursor === null || cursor.length > 2_048 || /[\u0000-\u001f\u007f]/.test(cursor)
@@ -85,6 +90,7 @@ function replayPagination(raw: JsonObject, conversationId: string): void {
       expectedBefore = cursor;
     } else if (index !== evidence.pages.length - 1) fail("page after terminal");
   }
+  const chronologicalIds = chronologicalGroups.reverse().flat();
   if (!chronologicalIds.length || (currentNode != null && !messages.has(currentNode))) fail("current node");
   const rootId = linearRootId(conversationId, new Set(chronologicalIds));
   const mapping: JsonObject = {
