@@ -71,3 +71,7 @@ The project has no runtime dependencies. Playwright, Vitest, TypeScript, and esb
 ## License and provenance
 
 ChatGPTExporter is MIT licensed. Narrow storage, dashboard, and build primitives were adapted from GrokExporter, and current endpoint/content-shape research was informed by pinned MIT upstream projects. Exact revisions and accepted/rejected ideas are recorded in [UPSTREAM_RESEARCH.md](docs/UPSTREAM_RESEARCH.md).
+
+## Private web API research reference
+
+[The pinned ChatGPT web API reference](docs/chatgpt-web-api/README.md) records source snapshots, observed endpoint contracts, cohort-dependent behavior, and provenance. It is historical research material, **not** the maintained exporter implementation; the runnable extension remains under `src/`.

@@ -33,6 +33,17 @@ const patterns = [
     regex: /\b(?:ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|sk-[A-Za-z0-9_-]{24,}|xai-[A-Za-z0-9_-]{24,})\b/g,
   },
 ];
+// These three literals are synthetic upstream test values from a pinned source
+// mirror. Match exact file and literal, without exempting any other cookie.
+const fixtureCookiePrefix = "__Secure-next-auth" + ".session-token=";
+const pinnedMirrorFixtureCookies = new Map([
+  ["docs/chatgpt-web-api/mirror/chatgpt-cli/254982ab784e4d13c7ab5f87de1522f9b047d0f5/crates/chatgpt/src/http/tests.rs", new Set([fixtureCookiePrefix + "secret-cookie"])],
+  ["docs/chatgpt-web-api/mirror/chatgpt-cli/254982ab784e4d13c7ab5f87de1522f9b047d0f5/crates/fake-chatgpt/src/lib.rs", new Set([
+    fixtureCookiePrefix + "fake-session",
+    fixtureCookiePrefix + "other-session",
+  ])],
+]);
+
 const findings = [];
 
 for (const name of names) {
@@ -51,6 +62,7 @@ for (const name of names) {
   for (const pattern of patterns) {
     pattern.regex.lastIndex = 0;
     for (const match of content.matchAll(pattern.regex)) {
+      if (pattern.label === "ChatGPT session cookie" && pinnedMirrorFixtureCookies.get(name)?.has(match[0])) continue;
       const line = content.slice(0, match.index).split("\n").length;
       findings.push(`${name}:${line}: possible ${pattern.label}`);
     }
