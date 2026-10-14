@@ -15,6 +15,33 @@ describe("ChatGPT endpoint allowlist", () => {
     });
   });
 
+  it("constructs current-history pagination endpoints and accepts opaque cursors", () => {
+    expect(resolveEndpoint({
+      operation: "conversation_current",
+      parameters: { conversationId: "conversation-1", numTurns: 10 },
+    }).path).toBe("/backend-api/conversations/conversation-1?include_has_versions=true&num_turns=10");
+
+    const opaqueCursor = "eyJwYWdlIjoyfQ==:v1";
+    expect(resolveEndpoint({
+      operation: "conversation_messages",
+      parameters: { conversationId: "conversation-1", before: opaqueCursor, numTurns: 10 },
+    }).path).toBe("/backend-api/conversations/conversation-1/messages?before=eyJwYWdlIjoyfQ%3D%3D%3Av1&include_has_versions=true&num_turns=10");
+
+    expect(resolveEndpoint({
+      operation: "project_page",
+      parameters: { cursor: opaqueCursor },
+    }).path).toContain("cursor=eyJwYWdlIjoyfQ%3D%3D%3Av1");
+
+    expect(() => resolveEndpoint({
+      operation: "conversation_current",
+      parameters: { conversationId: "conversation-1", numTurns: 0 },
+    })).toThrow("numTurns must be 1-100");
+    expect(() => resolveEndpoint({
+      operation: "conversation_messages",
+      parameters: { conversationId: "conversation-1", before: "bad\ncursor", numTurns: 10 },
+    })).toThrow("cursor is invalid");
+  });
+
   it("accepts only bounded identifiers, cursors, pages, and batch sizes", () => {
     expect(() => resolveEndpoint({
       operation: "conversation_detail",

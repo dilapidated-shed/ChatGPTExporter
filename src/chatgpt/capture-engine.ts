@@ -116,7 +116,7 @@ export class ChatGptCaptureEngine {
     const rebuild: Array<{ conversation: InventoryConversation; rawMarker: RawCompletionMarker }> = [];
 
     for (const conversation of inventory.conversations) {
-      if (await this.validCompletion(conversation)) {
+      if (await this.validCompletion(conversation, store)) {
         await store.transition(conversation, "complete", { attempt: 0, correlationId: "resume-verified" });
         result.skippedCount += 1;
         continue;
@@ -272,7 +272,7 @@ export class ChatGptCaptureEngine {
     return inventory;
   }
 
-  private async validCompletion(conversation: InventoryConversation): Promise<boolean> {
+  private async validCompletion(conversation: InventoryConversation, store: CaptureStore): Promise<boolean> {
     const base = conversationBasePath(conversation.conversationId);
     const marker = parseJson<ConversationCompletionMarker>(await this.options.filesystem.readText(`${base}/complete.json`));
     if (!marker
@@ -293,7 +293,7 @@ export class ChatGptCaptureEngine {
       const content = await this.options.filesystem.readText(path);
       if (content === undefined || await sha256Hex(content) !== hash) return false;
     }
-    return true;
+    return Boolean(await store.validRawMarker(conversation));
   }
 
   private async writeRunReport(result: CaptureRunResult): Promise<void> {

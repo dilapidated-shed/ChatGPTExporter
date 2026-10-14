@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { MemoryArchiveFileSystem } from "../../src/core/filesystem";
+import { sha256Hex } from "../../src/core/hash";
 import { prettyJson } from "../../src/core/serialization";
 import type { ConversationInventory, JsonValue } from "../../src/core/types";
 import { ChatGptCaptureEngine } from "../../src/chatgpt/capture-engine";
@@ -141,6 +142,109 @@ describe("journaled ChatGPT capture engine", () => {
     expect(Object.fromEntries(latest)).toEqual({ "conversation-1": "complete", "conversation-2": "failed" });
     expect(journal.entries.at(-1)?.error).toMatchObject({ code: "RATE_LIMITED", retryable: true, correlationId: "synthetic-correlation" });
   });
+
+  it("retries paginated history cleanly after an interrupted older-page request", async () => {
+    const filesystem = await fixtureFilesystem();
+    const interrupted = paginatedFixtureTransport("cursor-1");
+    const firstRun = new ChatGptCaptureEngine({
+      transport: interrupted,
+      filesystem,
+      workspace,
+      runId: "paginated-interrupted",
+      includeAssets: false,
+      includeAccountArtifacts: false,
+      now: clock(),
+    }).run();
+
+    await expect(firstRun).rejects.toThrow("synthetic interrupted history request");
+    expect(await filesystem.readText("conversations/conversation-1/raw-complete.json")).toBeUndefined();
+    expect(await filesystem.readText("conversations/conversation-1/complete.json")).toBeUndefined();
+
+    const resumedTransport = paginatedFixtureTransport();
+    const resumed = await new ChatGptCaptureEngine({
+      transport: resumedTransport,
+      filesystem,
+      workspace,
+      runId: "paginated-resumed",
+      includeAssets: false,
+      includeAccountArtifacts: false,
+      now: clock(),
+    }).run();
+
+    expect(resumed).toMatchObject({ capturedCount: 1, rebuiltCount: 0, failedCount: 0 });
+    expect(await filesystem.readText("conversations/conversation-1/complete.json")).toBeDefined();
+    expect(resumedTransport.request.mock.calls.map(([operation]) => operation.operation)).toEqual([
+      "conversation_batch",
+      "conversation_current",
+      "conversation_messages",
+      "conversation_messages",
+    ]);
+  });
+
+  it("refetches a hash-consistent archive whose retained pagination evidence omits an older page", async () => {
+    const filesystem = await fixtureFilesystem();
+    await new ChatGptCaptureEngine({
+      transport: paginatedFixtureTransport(),
+      filesystem,
+      workspace,
+      runId: "paginated-complete",
+      includeAssets: false,
+      includeAccountArtifacts: false,
+      now: clock(),
+    }).run();
+
+    const rawMarkerPath = "conversations/conversation-1/raw-complete.json";
+    const completePath = "conversations/conversation-1/complete.json";
+    const rawMarker = JSON.parse((await filesystem.readText(rawMarkerPath))!) as {
+      detailPath: string;
+      detailHash: string;
+      retrievalSource: string;
+    };
+    expect(rawMarker.retrievalSource).toBe("current");
+
+    const raw = JSON.parse((await filesystem.readText(rawMarker.detailPath))!) as {
+      __pagination_evidence: { page_count: number; pages: unknown[] };
+    };
+    expect(raw.__pagination_evidence.pages).toHaveLength(3);
+    raw.__pagination_evidence.pages.pop();
+    raw.__pagination_evidence.page_count = raw.__pagination_evidence.pages.length;
+
+    const truncatedRawText = prettyJson(raw as unknown as JsonValue);
+    rawMarker.detailHash = await sha256Hex(truncatedRawText);
+    rawMarker.detailPath = `conversations/conversation-1/source/detail-${rawMarker.detailHash}.json`;
+    await filesystem.writeTextAtomic(rawMarker.detailPath, truncatedRawText);
+    const rawMarkerText = prettyJson(rawMarker as unknown as JsonValue);
+    await filesystem.writeTextAtomic(rawMarkerPath, rawMarkerText);
+
+    const complete = JSON.parse((await filesystem.readText(completePath))!) as {
+      rawMarkerHash: string;
+      detailHash: string;
+    };
+    complete.rawMarkerHash = await sha256Hex(rawMarkerText);
+    complete.detailHash = rawMarker.detailHash;
+    await filesystem.writeTextAtomic(completePath, prettyJson(complete as unknown as JsonValue));
+
+    const refetchTransport = paginatedFixtureTransport();
+    const repeated = await new ChatGptCaptureEngine({
+      transport: refetchTransport,
+      filesystem,
+      workspace,
+      runId: "paginated-truncated-evidence",
+      includeAssets: false,
+      includeAccountArtifacts: false,
+      now: clock(),
+    }).run();
+
+    expect(repeated).toMatchObject({ capturedCount: 1, rebuiltCount: 0, skippedCount: 0, failedCount: 0 });
+    expect(refetchTransport.request).toHaveBeenCalled();
+    const repairedRawMarker = JSON.parse((await filesystem.readText(rawMarkerPath))!) as { detailPath: string };
+    const repairedRaw = JSON.parse((await filesystem.readText(repairedRawMarker.detailPath))!) as {
+      __pagination_evidence: { complete: boolean; page_count: number; pages: unknown[] };
+    };
+    expect(repairedRaw.__pagination_evidence).toMatchObject({ complete: true, page_count: 3 });
+    expect(repairedRaw.__pagination_evidence.pages).toHaveLength(3);
+  });
+
 });
 
 async function fixtureFilesystem(includeProject = false): Promise<MemoryArchiveFileSystem> {
@@ -221,6 +325,97 @@ function fixtureTransport(detail = conversationDetail()): ChatGptTransport & { r
     return { requestId: "request", protocolVersion: BRIDGE_PROTOCOL_VERSION, ok: true, status: 200, body, responseBytes: JSON.stringify(body).length, correlationId: "correlation" };
   });
   return { request } as ChatGptTransport & { request: ReturnType<typeof vi.fn> };
+}
+
+function paginatedFixtureTransport(failBefore?: string): ChatGptTransport & { request: ReturnType<typeof vi.fn> } {
+  const request = vi.fn(async (operation: ChatGptOperationParameters): Promise<ApiSuccessResponse> => {
+    if (operation.operation === "conversation_batch") {
+      throw Object.assign(new Error("synthetic batch endpoint unavailable"), {
+        status: 404,
+        retryable: false,
+        correlationId: "batch-404",
+      });
+    }
+
+    let body: JsonValue;
+    if (operation.operation === "conversation_current") {
+      body = paginatedFixturePage(
+        [paginatedFixtureMessage("message-3", "user"), paginatedFixtureMessage("message-4", "assistant")],
+        true,
+        "cursor-2",
+        "message-4",
+        true,
+      );
+    } else if (operation.operation === "conversation_messages") {
+      if (operation.parameters.before === failBefore) throw new Error("synthetic interrupted history request");
+      if (operation.parameters.before === "cursor-2") {
+        body = paginatedFixturePage(
+          [paginatedFixtureMessage("message-2", "assistant"), paginatedFixtureMessage("message-3", "user")],
+          true,
+          "cursor-1",
+          null,
+          false,
+        );
+      } else if (operation.parameters.before === "cursor-1") {
+        body = paginatedFixturePage(
+          [paginatedFixtureMessage("message-1", "user"), paginatedFixtureMessage("message-2", "assistant")],
+          false,
+          null,
+          null,
+          false,
+        );
+      } else {
+        throw new Error(`unexpected pagination cursor ${operation.parameters.before}`);
+      }
+    } else {
+      throw new Error(`unexpected ${operation.operation}`);
+    }
+
+    return {
+      requestId: "request",
+      protocolVersion: BRIDGE_PROTOCOL_VERSION,
+      ok: true,
+      status: 200,
+      body,
+      responseBytes: JSON.stringify(body).length,
+      correlationId: "paginated-correlation",
+    };
+  });
+  return { request } as ChatGptTransport & { request: ReturnType<typeof vi.fn> };
+}
+
+function paginatedFixtureMessage(id: string, role: "user" | "assistant"): JsonValue {
+  return {
+    id,
+    author: { role },
+    create_time: 1,
+    content: { content_type: "text", parts: [`content for ${id}`] },
+    status: "finished_successfully",
+    end_turn: role === "assistant",
+    recipient: "all",
+    metadata: {},
+  };
+}
+
+function paginatedFixturePage(
+  messages: JsonValue[],
+  hasPreviousPage: boolean,
+  startCursor: string | null,
+  currentNode: string | null,
+  includeIdentity: boolean,
+): JsonValue {
+  return {
+    ...(includeIdentity ? { conversation_id: "conversation-1" } : {}),
+    title: "Synthetic",
+    create_time: 1,
+    update_time: 2,
+    current_node: currentNode,
+    messages,
+    page_info: {
+      has_previous_page: hasPreviousPage,
+      start_cursor: startCursor,
+    },
+  };
 }
 
 function clock(): () => Date {

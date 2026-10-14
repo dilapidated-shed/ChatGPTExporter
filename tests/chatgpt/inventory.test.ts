@@ -116,6 +116,36 @@ describe("ChatGPT complete inventory", () => {
     }
   });
 
+  it("accepts opaque project cursors without weakening cycle detection", async () => {
+    const opaqueCursor = "eyJwYWdlIjoyfQ==:v1/+?&";
+    const observedProjectCursors: Array<string | null> = [];
+    const transport = scriptedTransport((operation) => {
+      if (operation.operation === "conversation_page") return page([], 0, 0);
+      if (operation.operation === "project_page") {
+        observedProjectCursors.push(operation.parameters.cursor);
+        return operation.parameters.cursor === null
+          ? { items: [{ gizmo: { gizmo: { id: "project-1" } } }], cursor: opaqueCursor }
+          : { items: [], cursor: null };
+      }
+      if (operation.operation === "project_conversation_page") {
+        expect(operation.parameters).toEqual({ projectId: "project-1", cursor: "0" });
+        return { items: [], cursor: null };
+      }
+      throw new Error(`unexpected ${operation.operation}`);
+    });
+
+    const inventory = await new ChatGptInventoryEngine({
+      transport,
+      filesystem: new MemoryArchiveFileSystem(),
+      workspace,
+      settings: { ...DEFAULT_INVENTORY_SETTINGS, includeArchived: false, includeProjects: true, includeShared: false },
+    }).run();
+
+    expect(inventory.complete).toBe(true);
+    expect(observedProjectCursors).toEqual([null, opaqueCursor]);
+    expect(inventory.projects?.map((project) => project.projectId)).toEqual(["project-1"]);
+  });
+
   it("fails closed when project cursors cycle or claim continuation after an empty page", async () => {
     for (const nextCursor of ["cursor-1", "cursor-2"] as const) {
       let projectCalls = 0;
