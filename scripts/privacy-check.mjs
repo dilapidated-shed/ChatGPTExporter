@@ -35,11 +35,12 @@ const patterns = [
 ];
 // These three literals are synthetic upstream test values from a pinned source
 // mirror. Match exact file and literal, without exempting any other cookie.
+const fixtureCookiePrefix = "__Secure-next-auth" + ".session-token=";
 const pinnedMirrorFixtureCookies = new Map([
-  ["docs/chatgpt-web-api/mirror/chatgpt-cli/254982ab784e4d13c7ab5f87de1522f9b047d0f5/crates/chatgpt/src/http/tests.rs", new Set(["__Secure-next-auth.session-token=secret-cookie"])],
+  ["docs/chatgpt-web-api/mirror/chatgpt-cli/254982ab784e4d13c7ab5f87de1522f9b047d0f5/crates/chatgpt/src/http/tests.rs", new Set([fixtureCookiePrefix + "secret-cookie"])],
   ["docs/chatgpt-web-api/mirror/chatgpt-cli/254982ab784e4d13c7ab5f87de1522f9b047d0f5/crates/fake-chatgpt/src/lib.rs", new Set([
-    "__Secure-next-auth.session-token=fake-session",
-    "__Secure-next-auth.session-token=other-session",
+    fixtureCookiePrefix + "fake-session",
+    fixtureCookiePrefix + "other-session",
   ])],
 ]);
 
