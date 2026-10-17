@@ -111,8 +111,12 @@ static void execute(void)
     listing.operation = CGW_CONVERSATION_PAGE;
     listing.arguments.conversation_page.offset = 0;
     listing.arguments.conversation_page.limit = 2;
-    check(request(client, listing, 0, &buffer, &observed) == CGW_FETCH_OK,
-          "HTTPS listing result");
+    cgw_fetch_result first = request(client, listing, 0, &buffer, &observed);
+    if (first != CGW_FETCH_OK)
+        fprintf(stderr, "fixture listing: %s HTTP %u received %zu bytes\n",
+                cgw_fetch_result_name(first), observed.http_status,
+                observed.received_bytes);
+    check(first == CGW_FETCH_OK, "HTTPS listing result");
     check(observed.http_status == 200 && observed.retryable == 0,
           "HTTPS status recorded");
     check(strcmp(buffer.text, "{\"items\":[],\"total\":0}") == 0,
