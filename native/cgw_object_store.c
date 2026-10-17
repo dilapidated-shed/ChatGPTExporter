@@ -94,6 +94,8 @@ cgw_store *cgw_store_open(const char *private_root)
     if (store->stage_dir_fd < 0) goto fail;
     store->object_dir_fd = directory_at(store->root_fd, "objects");
     if (store->object_dir_fd < 0) goto fail;
+    /* Persist newly created private child directory entries. */
+    if (fsync(store->root_fd) != 0) goto fail;
     store->sha = EVP_MD_CTX_new();
     if (store->sha == NULL) goto fail;
     return store;
