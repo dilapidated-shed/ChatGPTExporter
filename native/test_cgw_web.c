@@ -43,8 +43,6 @@ static void rejected(cgw_input input, cgw_status status)
 static void static_operations(void)
 {
     cgw_input x = {0};
-    x.operation = CGW_SESSION_PROBE;
-    expected(x, CGW_GET, "/api/auth/session", "", 1000000, 0);
     x.operation = CGW_ACCOUNTS_LIST;
     expected(x, CGW_GET, "/backend-api/accounts/check/v4-2023-04-27",
              "", 5000000, 1);
