@@ -1,4 +1,9 @@
+#define _GNU_SOURCE
 #include "cgw_https.h"
+#include "cgw_object_store.h"
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,10 +188,69 @@ static void execute(void)
     cgw_fetcher_close(client);
 }
 
+
+static void durable_https_archive(void)
+{
+    char root[] = "/tmp/cgw-https-objects-XXXXXX";
+    check(mkdtemp(root) != NULL, "TLS output private root");
+    cgw_store *store = cgw_store_open(root);
+    check(store != NULL, "TLS output store");
+    cgw_fetcher *client = cgw_fetcher_open(token_provider, NULL, "account_A");
+    check(client != NULL, "TLS archive client");
+
+    cgw_input listing = {0};
+    listing.operation = CGW_CONVERSATION_PAGE;
+    listing.arguments.conversation_page.limit = 2;
+    cgw_fetch_options options = {0};
+    cgw_fetch_observation observed = {0};
+    check(cgw_store_begin(store) == CGW_STORE_OK, "begin TLS stage");
+    check(cgw_fetcher_execute(client, &listing, options,
+                              cgw_store_sink, store, &observed) == CGW_FETCH_OK,
+          "TLS bytes streamed to disk");
+    cgw_store_receipt receipt;
+    check(cgw_store_commit(store, &receipt) == CGW_STORE_OK,
+          "TLS success publishes raw hash object");
+    check(strcmp(receipt.sha256,
+          "4bf7c8639bc34bbbae5aef4aba3c724f9a425cbdc0416ab6384f7745ae1acb96")
+          == 0, "network data digest verified");
+
+    char final[512];
+    check(snprintf(final, sizeof(final), "%s/objects/%s", root, receipt.sha256)
+          < (int)sizeof(final), "archive object path bound");
+    int fd = open(final, O_RDONLY | O_NOFOLLOW);
+    check(fd >= 0, "raw response saved at content hash");
+    char body[64] = {0};
+    check(read(fd, body, sizeof(body)) == 22
+          && strcmp(body, "{\"items\":[],\"total\":0}") == 0,
+          "raw TLS body survives in exact order");
+    close(fd);
+
+    check(cgw_store_begin(store) == CGW_STORE_OK, "begin failure stage");
+    cgw_input rejected = share("rate");
+    check(cgw_fetcher_execute(client, &rejected, options,
+                              cgw_store_sink, store, &observed)
+          == CGW_FETCH_RATE_LIMITED,
+          "rate-limited response not classified as complete");
+    cgw_store_abort(store);
+    check(cgw_store_commit(store, &receipt) == CGW_STORE_INVALID_STATE,
+          "failed transport has no publication authorization");
+    cgw_fetcher_close(client);
+    cgw_store_close(store);
+    check(unlink(final) == 0, "remove private TLS test object");
+    check(snprintf(final, sizeof(final), "%s/objects", root)
+          < (int)sizeof(final), "objects path bound");
+    check(rmdir(final) == 0, "object dir removed");
+    check(snprintf(final, sizeof(final), "%s/.staging", root)
+          < (int)sizeof(final), "staging path bound");
+    check(rmdir(final) == 0, "no failed TLS stage remains");
+    check(rmdir(root) == 0, "private TLS test root removed");
+}
+
 int main(void)
 {
     preflight();
     execute();
+    durable_https_archive();
     printf("PASS %u fixed-origin TLS HTTP controls (fixture credentials only)\n",
            assertions);
     return 0;

@@ -24,6 +24,8 @@ jobs:
       - name: Credential-free native web contract
         run: make -C native check
       - name: Host-only TLS fixture dependencies
-        run: sudo apt-get install -y libcurl4-openssl-dev openssl
+        run: sudo apt-get install -y libcurl4-openssl-dev libssl-dev openssl
+      - name: Native private content-addressed storage
+        run: make -C native check-store
       - name: Native HTTPS read-only transport, synthetic TLS fixture
         run: make -C native check-https
