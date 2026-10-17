@@ -83,12 +83,6 @@ cgw_status cgw_resolve(const cgw_input *input, cgw_http_request *output)
     const char *value;
 
     switch (input->operation) {
-    case CGW_SESSION_PROBE:
-        request.requires_authentication = 0;
-        request.response_limit_bytes = 1000000;
-        written = appendf(request.path, sizeof(request.path), &path_used,
-                          "/api/auth/session");
-        break;
     case CGW_ACCOUNTS_LIST:
         request.response_limit_bytes = 5000000;
         written = appendf(request.path, sizeof(request.path), &path_used,
