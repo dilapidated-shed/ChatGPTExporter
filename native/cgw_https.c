@@ -46,9 +46,7 @@ static int valid_identifier(const char *value)
     size_t count = 0;
     for (; value[count] != '\0'; ++count) {
         unsigned char byte = (unsigned char)value[count];
-        if (++count > 256) return 0;
-        /* Count was advanced to apply the limit; undo it for the next byte. */
-        --count;
+        if (count >= 256) return 0;
         if (!((byte >= 'A' && byte <= 'Z')
               || (byte >= 'a' && byte <= 'z')
               || (byte >= '0' && byte <= '9')
@@ -189,8 +187,7 @@ cgw_fetch_result cgw_fetcher_execute(cgw_fetcher *client,
 {
     if (observation != NULL) memset(observation, 0, sizeof(*observation));
     if (client == NULL || input == NULL || sink == NULL
-        || (options.timeout_ms > 120000)
-        || (options.timeout_ms == 0 && CGW_DEFAULT_TIMEOUT_MS == 0))
+        || options.timeout_ms > 120000)
         return CGW_FETCH_INVALID_INPUT;
 
     cgw_http_request plan;
@@ -200,7 +197,7 @@ cgw_fetch_result cgw_fetcher_execute(cgw_fetcher *client,
         return CGW_FETCH_INVALID_INPUT;
     size_t maximum = options.response_cap_bytes
         ? options.response_cap_bytes : plan.response_limit_bytes;
-    if (maximum == 0 || maximum > SIZE_MAX) return CGW_FETCH_INVALID_INPUT;
+    if (maximum == 0) return CGW_FETCH_INVALID_INPUT;
     if (client->token == NULL) return CGW_FETCH_AUTH_UNAVAILABLE;
 
     char token[CGW_TOKEN_CAPACITY] = {0};
@@ -276,9 +273,7 @@ cgw_fetch_result cgw_fetcher_execute(cgw_fetcher *client,
     REQUIRE_CURL(CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_2TLS);
     REQUIRE_CURL(CURLOPT_PROXY, "");
     REQUIRE_CURL(CURLOPT_NOPROXY, "*");
-    REQUIRE_CURL(CURLOPT_COOKIE, "");
     REQUIRE_CURL(CURLOPT_NOSIGNAL, 1L);
-    REQUIRE_CURL(CURLOPT_FOLLOWLOCATION, 0L);
     REQUIRE_CURL(CURLOPT_CONNECTTIMEOUT_MS, 10000L);
     REQUIRE_CURL(CURLOPT_TIMEOUT_MS,
                  (long)(options.timeout_ms ? options.timeout_ms
