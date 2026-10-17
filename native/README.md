@@ -33,7 +33,8 @@ publish no partial request. This source has no third-party runtime dependency.
 - The caller **must** pin \`https://chatgpt.com\`, TLS verification, approved
   operation/method, per-operation response byte limit and actual read-only
   behavior. Do not accept caller-provided URLs, headers, or methods.
-- Session acquisition remains **outside** this library. A public OpenAI API
+- No session-probe operation is exposed: authentication acquisition and
+  token-containing responses remain **outside** this library. A public OpenAI API
   key does **not** authorize ChatGPT web-history access. Do not solicit,
   print, copy from browser profiles, or persist bearer tokens or cookies.
   A safe consented sign-in adapter is an unresolved prerequisite for
