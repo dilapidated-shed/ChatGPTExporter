@@ -34,7 +34,7 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           repository: isomorphisms/android-NDK
-          run-id: 39093146461
+          run-id: 39094757573
           github-token: ${{ github.token }}
           name: direct-webview-shells
           path: direct-dex
@@ -63,7 +63,7 @@ jobs:
       - name: Install build-host Android inputs
         run: sdkmanager "platforms;android-34" "build-tools;36.0.0" "ndk;29.0.14206865"
       - name: Build arm64 source candidate and separate x86 synthetic fixture
-        run: make -C android build fixture validate DEX_DIR=${{ github.workspace }}/direct-dex CC_ARM64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang CC_X86_64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang BUILD_TOOLS=$ANDROID_HOME/build-tools/36.0.0 ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar KEYSTORE=${{ github.workspace }}/fixture-signer/_/build/app/wegert-debug.keystore CERT_SHA256=de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9
+        run: make -C android build fixture validate DEX_DIR=${{ github.workspace }}/direct-dex DEX_SOURCE=950fef409148e91fc3ed59b0fbf64368f1ad0438 CC_ARM64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang CC_X86_64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang BUILD_TOOLS=$ANDROID_HOME/build-tools/36.0.0 ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar KEYSTORE=${{ github.workspace }}/fixture-signer/_/build/app/wegert-debug.keystore CERT_SHA256=de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9
       - name: Exercise actual Android WebMessagePort callbacks
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         env:
