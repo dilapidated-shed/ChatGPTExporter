@@ -34,7 +34,11 @@ for mode in 0 1 2 3 4 5 6 7 8 {
         if grep -q "$expected" "$output/mode-$mode.log" { setvar passed = 'true'; break }
         sleep 1
     }
-    test "$passed" = true
+    if test "$passed" != true {
+        "$adb" logcat -d -s CGW-E1:V AndroidRuntime:E chromium:E > "$output/failure-$mode.log"
+        cat "$output/failure-$mode.log"
+        exit 1
+    }
     grep -q port:ready "$output/mode-$mode.log"
     printf '\033[32mPASS\033[0m synthetic WebView mode %s\n' "$mode"
 }
