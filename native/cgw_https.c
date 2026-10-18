@@ -22,6 +22,7 @@ typedef struct {
     void *sink_context;
     size_t maximum;
     size_t received;
+    size_t chunks;
     int too_large;
     int sink_rejected;
     int secret_echo;
@@ -105,8 +106,12 @@ static size_t receive_bytes(char *bytes, size_t element_size,
         return 0;
     }
     size_t amount = element_size * element_count;
+    ++state->chunks;
     if (amount > state->maximum - state->received) {
         state->too_large = 1;
+        /* Account for the rejected callback too. The sink cap is exact, but
+         * cURL may already have received one callback beyond that cap. */
+        if (amount <= SIZE_MAX - state->received) state->received += amount;
         return 0;
     }
     state->received += amount;
@@ -305,6 +310,7 @@ cgw_fetch_result cgw_fetcher_execute(cgw_fetcher *client,
         observation->http_status = status >= 100 && status <= 599
             ? (unsigned)status : 0;
         observation->received_bytes = receiving.received;
+        observation->received_chunks = receiving.chunks;
     }
 
     if (receiving.too_large) {

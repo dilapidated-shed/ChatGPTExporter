@@ -14,8 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
@@ -24,8 +27,33 @@ jobs:
       - name: Credential-free native web contract
         run: make -C native check
       - name: Host-only TLS fixture dependencies
-        run: sudo apt-get install -y libcurl4-openssl-dev libssl-dev openssl
+        run: sudo apt-get install -y pkg-config libcurl4-openssl-dev libssl-dev openssl
       - name: Native private content-addressed storage
         run: make -C native check-store
       - name: Native HTTPS read-only transport, synthetic TLS fixture
         run: make -C native check-https
+      - name: Bounded capture and targeted mutants, host loopback evidence only
+        run: make -C native check-capture check-capture-mutants > native/build/capture-host.log 2>&1
+      - name: Pin independent receipt verifier source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: isomorphisms/ai-ci
+          ref: 42ea494e882cfee8c06b8a1cab7a7a710895399a
+          path: independent-acceptance
+          persist-credentials: false
+      - name: Independent host fixture verifier, not production ICK acceptance
+        run: cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic independent-acceptance/native-capture/check.c -lcrypto -o native/build/independent-capture-host
+      - name: Independent raw-oracle, private-mode, marker and report checks
+        run: native/build/independent-capture-host "$GITHUB_WORKSPACE/native" "$GITHUB_WORKSPACE/native/fixtures/capture" "$GITHUB_WORKSPACE/.github/workflows/check.yml"
+      - name: Retained skipped-trigger mutant
+        run: native/build/independent-capture-host --reject-skipped-trigger independent-acceptance/native-capture/fixtures/skipped-trigger.yml
+      - name: Preserve synthetic host evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-capture-host-${{ github.event.pull_request.head.sha || github.sha }}
+          if-no-files-found: error
+          path: |
+            native/build/capture-host.log
+            native/build/capture-success.path
+            native/build/capture-*/**
