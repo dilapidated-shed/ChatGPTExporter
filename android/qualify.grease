@@ -10,6 +10,8 @@ mkdir -p "$output"
 "$adb" shell getprop ro.product.cpu.abi > "$output/abi.txt"
 "$adb" shell getprop ro.build.fingerprint > "$output/build-fingerprint.txt"
 grep -qx x86_64 "$output/abi.txt"
+"$adb" shell svc wifi disable
+"$adb" shell svc data disable
 "$adb" install -r "$apk"
 var installed = "$("$adb" shell pm path org.isomorphisms.chatgptexporter.e1fixture | tr -d '\r' | sed 's/^package://')"
 test -n "$installed"

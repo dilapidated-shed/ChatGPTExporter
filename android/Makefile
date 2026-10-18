@@ -52,10 +52,10 @@ build/fixture-unsigned.apk: build/fixture/lib/x86_64/libcgw_webview.so AndroidMa
 fixture: build/fixture-unsigned.apk
 	test -f "$(KEYSTORE)"
 	test -n "$(CERT_SHA256)"
-	keytool -exportcert -keystore "$(KEYSTORE)" -storepass android -alias androiddebugkey -file build/fixture-cert.der
+	keytool -exportcert -keystore "$(KEYSTORE)" -storetype PKCS12 -storepass wegert-debug -alias wegert-debug -file build/fixture-cert.der
 	printf '%s  build/fixture-cert.der\n' '$(CERT_SHA256)' | sha256sum -c -
 	"$(BUILD_TOOLS)/zipalign" -f 4 build/fixture-unsigned.apk build/fixture-aligned.apk
-	"$(BUILD_TOOLS)/apksigner" sign --ks "$(KEYSTORE)" --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out build/e1-synthetic.apk build/fixture-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" sign --ks "$(KEYSTORE)" --ks-type PKCS12 --ks-pass pass:wegert-debug --key-pass pass:wegert-debug --ks-key-alias wegert-debug --out build/e1-synthetic.apk build/fixture-aligned.apk
 	"$(BUILD_TOOLS)/apksigner" verify --verbose --print-certs build/e1-synthetic.apk
 
 validate: build
