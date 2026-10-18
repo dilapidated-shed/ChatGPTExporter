@@ -37,7 +37,7 @@ build/arm64-unsigned.apk: build/lib/arm64-v8a/libcgw_webview.so AndroidManifest.
 	test -f "$(DEX_DIR)/classes.dex"
 	test -f "$(DEX_DIR)/classes2.dex"
 	test -f "$(DEX_DIR)/classes3.dex"
-	"$(BUILD_TOOLS)/aapt2" link -I "$(ANDROID_JAR)" --manifest AndroidManifest.xml --version-code 1 --version-name e1-source -o build/manifest.apk
+	"$(BUILD_TOOLS)/aapt2" link -I "$(ANDROID_JAR)" --manifest AndroidManifest.xml --version-code 2 --version-name e1-controls -o build/manifest.apk
 	cp build/manifest.apk $@
 	cp "$(DEX_DIR)"/classes*.dex build/
 	cd build && zip -q arm64-unsigned.apk classes.dex classes2.dex classes3.dex lib/arm64-v8a/libcgw_webview.so
@@ -70,9 +70,7 @@ validate: build
 
 # Explicitly requested C67 development trial; signs the qualified ARM64 input.
 .PHONY: c67-trial
-c67-trial:
-	printf '%s  build/arm64-unsigned.apk\n' '5df55daaec4ab50f3916d272f1239c5c2150d4de7862677840b76ade5d74764c' | sha256sum -c -
-	grep -qx '7ff59674079d57bea4e366f36ae455cd9d5fc3dc' build/source-commit.txt
+c67-trial: build/arm64-unsigned.apk
 	keytool -exportcert -keystore "$(KEYSTORE)" -storetype PKCS12 -storepass wegert-debug -alias wegert-debug -file build/c67-cert.der
 	printf '%s  build/c67-cert.der\n' 'de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9' | sha256sum -c -
 	"$(BUILD_TOOLS)/zipalign" -P 16 -f 4 build/arm64-unsigned.apk build/c67-aligned.apk

@@ -63,7 +63,7 @@ jobs:
       - name: Install build-host Android inputs
         run: sdkmanager "platforms;android-34" "build-tools;36.0.0" "ndk;29.0.14206865"
       - name: Build arm64 source candidate and separate x86 synthetic fixture
-        run: make -C android build fixture validate DEX_DIR=${{ github.workspace }}/direct-dex DEX_SOURCE=950fef409148e91fc3ed59b0fbf64368f1ad0438 CC_ARM64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang CC_X86_64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang BUILD_TOOLS=$ANDROID_HOME/build-tools/36.0.0 ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar KEYSTORE=${{ github.workspace }}/fixture-signer/_/build/app/wegert-debug.keystore CERT_SHA256=de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9
+        run: make -C android build fixture validate c67-trial DEX_DIR=${{ github.workspace }}/direct-dex DEX_SOURCE=950fef409148e91fc3ed59b0fbf64368f1ad0438 CC_ARM64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang CC_X86_64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang BUILD_TOOLS=$ANDROID_HOME/build-tools/36.0.0 ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar KEYSTORE=${{ github.workspace }}/fixture-signer/_/build/app/wegert-debug.keystore CERT_SHA256=de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9
       - name: Prepare ephemeral emulator hardware access
         env:
           ASAN_OPTIONS: detect_leaks=0
@@ -84,39 +84,3 @@ jobs:
         with:
           name: e1-android-evidence
           path: android/build/
-
-  c67-trial:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          run-id: 39095279328
-          github-token: ${{ github.token }}
-          name: e1-android-evidence
-          path: android/build
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: isomorphismes/wegert
-          ref: dfa3751f0282cdf6a2083c97063b0e8e996d0d92
-          path: fixture-signer
-          persist-credentials: false
-      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
-        with:
-          packages: ''
-      - run: sdkmanager "build-tools;36.0.0"
-      - name: Sign verified E1 ARM64 bytes for C67 trial
-        run: make -C android c67-trial BUILD_TOOLS=$ANDROID_HOME/build-tools/36.0.0 KEYSTORE=${{ github.workspace }}/fixture-signer/_/build/app/wegert-debug.keystore
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: chatgpt-exporter-c67-e1
-          path: |
-            android/build/chatgpt-exporter-c67-e1.apk
-            android/build/c67.sha256
-            android/build/c67-signature.txt
-            android/build/c67-manifest.txt
-            android/build/source-commit.txt

@@ -13,7 +13,7 @@
 #define CLIENT "org/isomorphisms/webview/BridgeClient"
 #define CALLBACK "org/isomorphisms/webview/BridgeMessageCallback"
 #define TAG "CGW-E1"
-static jobject activity, webview, active_port;
+static jobject activity, webview, active_port, status_view;
 static cgw_webview_bridge *bridge;
 static char bootstrap[33];
 static int port_verified;
@@ -68,9 +68,9 @@ static void report(const char *result)
 static void show_status(JNIEnv *env, const char *text)
 {
     if (!activity) return;
-    jmethodID title = method(env, activity, "setTitle", "(Ljava/lang/CharSequence;)V");
+    jmethodID title = method(env, status_view, "setText", "(Ljava/lang/CharSequence;)V");
     jstring value = (*env)->NewStringUTF(env, text);
-    if (title && value) (*env)->CallVoidMethod(env, activity, title, value);
+    if (title && value) (*env)->CallVoidMethod(env, status_view, title, value);
     if (value) (*env)->DeleteLocalRef(env, value);
 }
 
@@ -152,13 +152,14 @@ static void post(JNIEnv *env, jobject port, const char *wire)
 static void probe(JNIEnv *env)
 {
     if (!bridge || !port_verified || !current_document(env, webview)) {
-        report("probe:not_ready"); return;
+        report("probe:not_ready"); show_status(env, "Session check not ready - wait for the page to load"); return;
     }
     cgw_input input = { .operation = CGW_ACCOUNTS_LIST };
     cgw_webview_command command;
     cgw_webview_result result = cgw_webview_bridge_begin(
         bridge, &input, discard, NULL, &command);
-    if (result != CGW_WEBVIEW_OK) { report(cgw_webview_result_name(result)); return; }
+    if (result != CGW_WEBVIEW_OK) { report(cgw_webview_result_name(result)); show_status(env, "Session check unavailable - wait or reload the page"); return; }
+    show_status(env, "Checking session...");
     post(env, active_port, command.wire);
 }
 
@@ -275,14 +276,16 @@ static void on_message(JNIEnv *env, jobject self, jobject port, jobject message)
         if (cgw_webview_bridge_port_ready(bridge) == CGW_WEBVIEW_OK) {
             port_verified = 1;
             report("port:ready");
-            show_status(env, "ChatGPT - session check available in menu");
+            show_status(env, "Ready - tap Check session");
 #ifdef CGW_WEBVIEW_SYNTHETIC
-            probe(env);
+            if (atomic_load(&fixture) != 0) probe(env);
 #endif
         }
     } else if (port_verified) {
         cgw_webview_result result = cgw_webview_bridge_receive(bridge, wire, strlen(wire));
         report(cgw_webview_result_name(result));
+        if (result != CGW_WEBVIEW_OK && result != CGW_WEBVIEW_HTTP_FAILURE)
+            show_status(env, "Session check rejected - tap Check session to retry");
         cgw_webview_observation observation;
         cgw_webview_bridge_observation(bridge, &observation);
         if (result == CGW_WEBVIEW_HTTP_FAILURE) {
@@ -291,7 +294,7 @@ static void on_message(JNIEnv *env, jobject self, jobject port, jobject message)
             report(status);
             show_status(env, observation.http_status == 401 || observation.http_status == 403
                                 ? "Sign in on the page, then check session"
-                                : "Session check failed - retry from menu");
+                                : "Session check failed - tap Check session to retry");
         }
         if (observation.complete) {
             report("probe:complete");
@@ -306,6 +309,7 @@ static void on_started(JNIEnv *env, jobject self, jobject view, jstring url, job
     (void)self; (void)icon;
     if (webview && (*env)->IsSameObject(env, webview, view)) {
         revoke(env); report("navigation:revoked");
+        show_status(env, "Page loading - session check not ready");
         if (!trusted_url(env, url) && !login_url(env, url)) {
             jmethodID stop = method(env, view, "stopLoading", "()V");
             if (stop) (*env)->CallVoidMethod(env, view, stop);
@@ -423,9 +427,11 @@ static jboolean create_menu(JNIEnv *env, jobject self, jobject menu)
 {
     (void)self;
     jmethodID add = method(env, menu, "add", "(IIILjava/lang/CharSequence;)Landroid/view/MenuItem;");
-    jstring title = (*env)->NewStringUTF(env, "Check session (read-only)");
+    jstring title = (*env)->NewStringUTF(env, "Check session");
     if (!add || !title) return JNI_FALSE;
-    (*env)->CallObjectMethod(env, menu, add, 0, 1, 0, title);
+    jobject item = (*env)->CallObjectMethod(env, menu, add, 0, 1, 0, title);
+    jmethodID show = method(env, item, "setShowAsAction", "(I)V");
+    if (show) (*env)->CallVoidMethod(env, item, show, 6); /* ALWAYS | WITH_TEXT */
     return JNI_TRUE;
 }
 
@@ -448,6 +454,48 @@ static void on_back(JNIEnv *env, jobject self)
         jmethodID finish = method(env, self, "finish", "()V");
         if (finish) (*env)->CallVoidMethod(env, self, finish);
     }
+}
+
+
+/* Native controls remain outside the web page and its sidebar. The toolbar
+ * routes its always-visible action through the existing Activity menu callback. */
+static jobject context_view(JNIEnv *env, const char *name)
+{
+    jclass cls = (*env)->FindClass(env, name);
+    jmethodID init = cls ? (*env)->GetMethodID(env, cls, "<init>", "(Landroid/content/Context;)V") : NULL;
+    return init ? (*env)->NewObject(env, cls, init, activity) : NULL;
+}
+
+static int install_controls(JNIEnv *env, jobject view)
+{
+    jobject column = context_view(env, "android/widget/LinearLayout");
+    jobject toolbar = context_view(env, "android/widget/Toolbar");
+    jobject status = context_view(env, "android/widget/TextView");
+    if (!column || !toolbar || !status) return 0;
+    jmethodID orientation = method(env, column, "setOrientation", "(I)V");
+    jmethodID add = method(env, column, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
+    jmethodID actionbar = method(env, activity, "setActionBar", "(Landroid/widget/Toolbar;)V");
+    jmethodID content = method(env, activity, "setContentView", "(Landroid/view/View;)V");
+    jclass params_class = (*env)->FindClass(env, "android/widget/LinearLayout$LayoutParams");
+    jmethodID params = params_class ? (*env)->GetMethodID(env, params_class, "<init>", "(IIF)V") : NULL;
+    if (!orientation || !add || !actionbar || !content || !params) return 0;
+    (*env)->CallVoidMethod(env, column, orientation, 1);
+    jobject wrap = (*env)->NewObject(env, params_class, params, -1, -2, 0.0f);
+    jobject status_wrap = (*env)->NewObject(env, params_class, params, -1, -2, 0.0f);
+    jobject fill = (*env)->NewObject(env, params_class, params, -1, 0, 1.0f);
+    if (!wrap || !status_wrap || !fill) return 0;
+    (*env)->CallVoidMethod(env, column, add, toolbar, wrap);
+    (*env)->CallVoidMethod(env, column, add, status, status_wrap);
+    (*env)->CallVoidMethod(env, column, add, view, fill);
+    (*env)->CallVoidMethod(env, activity, content, column);
+    (*env)->CallVoidMethod(env, activity, actionbar, toolbar);
+    jmethodID get_bar = method(env, activity, "getActionBar", "()Landroid/app/ActionBar;");
+    jobject bar = get_bar ? (*env)->CallObjectMethod(env, activity, get_bar) : NULL;
+    jmethodID title_visible = method(env, bar, "setDisplayShowTitleEnabled", "(Z)V");
+    if (title_visible) (*env)->CallVoidMethod(env, bar, title_visible, JNI_FALSE);
+    status_view = (*env)->NewGlobalRef(env, status);
+    show_status(env, "Page loading - session check not ready");
+    return !(*env)->ExceptionCheck(env);
 }
 
 static void on_create(JNIEnv *env, jobject self, jobject bundle)
@@ -487,7 +535,7 @@ static void on_create(JNIEnv *env, jobject self, jobject bundle)
     jmethodID load = method(env, view, "loadUrl", "(Ljava/lang/String;)V");
     if (!client || !set_client || !content || !load) return;
     (*env)->CallVoidMethod(env, view, set_client, client);
-    (*env)->CallVoidMethod(env, self, content, view);
+    if (!install_controls(env, view)) return;
 #ifdef CGW_WEBVIEW_SYNTHETIC
     jmethodID get_intent = method(env, self, "getIntent", "()Landroid/content/Intent;");
     jobject intent = get_intent ? (*env)->CallObjectMethod(env, self, get_intent) : NULL;
@@ -516,6 +564,7 @@ static void on_destroy(JNIEnv *env, jobject self)
             if (destroy) (*env)->CallVoidMethod(env, webview, destroy);
             (*env)->DeleteGlobalRef(env, webview); webview = NULL;
         }
+        if (status_view) { (*env)->DeleteGlobalRef(env, status_view); status_view = NULL; }
         cgw_webview_bridge_close(bridge); bridge = NULL;
         (*env)->DeleteGlobalRef(env, activity); activity = NULL;
     }
