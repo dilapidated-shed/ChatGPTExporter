@@ -25,7 +25,7 @@
 
 enum scenario { GOOD, EMPTY, DUPLICATE, OVERLAP, CONFLICT, REPEATED_OFFSET, TOTAL_DRIFT,
     PREMATURE_EMPTY, IMPOSSIBLE_TOTAL, INVENTORY_DRIFT, TRUNCATED, GRAPH_CYCLE, MISSING_PARENT,
-    DETAIL_PAGINATION, AUTH401, AUTH403, RATE429, SERVER503, OVERSIZED, SECRET_ECHO, SHORT_TOTAL, STOP_SECOND, MALFORMED_GRAPH, DUPLICATE_KEY };
+    DETAIL_PAGINATION, AUTH401, AUTH403, RATE429, SERVER503, OVERSIZED, SECRET_ECHO, SHORT_TOTAL, STOP_SECOND, MALFORMED_GRAPH, DUPLICATE_KEY, LONG_GRAPH };
 static const char token[] = "synthetic-fixture-token-123456";
 static const char workspace[] = "selected_fixture_workspace";
 static unsigned assertions, failures;
@@ -131,6 +131,18 @@ static void serve_request(SSL *ssl, enum scenario mode, unsigned *first_pages, i
     const char prefix[] = "/backend-api/conversation/";
     if (!strncmp(path, prefix, sizeof(prefix) - 1)) {
         const char *id = path + sizeof(prefix) - 1;
+        if (mode == LONG_GRAPH) {
+            size_t capacity = 524288; char *body = malloc(capacity); if (!body) return;
+            size_t n = (size_t)snprintf(body, capacity, "{\"id\":\"%.256s\",\"current_node\":\"node-1999\",\"mapping\":{", id);
+            for (unsigned i = 0; i < 2000; ++i) {
+                char parent[64], child[64];
+                if (!i) (void)snprintf(parent, sizeof(parent), "null"); else (void)snprintf(parent, sizeof(parent), "\"node-%u\"", i - 1);
+                if (i == 1999) (void)snprintf(child, sizeof(child), "[]"); else (void)snprintf(child, sizeof(child), "[\"node-%u\"]", i + 1);
+                int written = snprintf(body + n, capacity - n, "%s\"node-%u\":{\"id\":\"node-%u\",\"parent\":%s,\"children\":%s,\"message\":null}", i ? "," : "", i, i, parent, child);
+                if (written < 0 || (size_t)written >= capacity - n) { free(body); return; } n += (size_t)written;
+            }
+            (void)snprintf(body + n, capacity - n, "}}"); respond(ssl, 200, body, 0); free(body); return;
+        }
         if (mode == STOP_SECOND && !strcmp(id, "conversation-2")) {
             if (event_fd < 0 || write(event_fd, "K", 1) != 1) return;
             char closed; ssize_t observed = read(event_fd, &closed, 1); (void)observed; return;
@@ -298,6 +310,11 @@ int main(int argc, char **argv)
     check(report.result == CGW_CAPTURE_COMPLETE && !report.expected && !report.completed && report.requests == 4, "recognized empty main and archived histories");
     cgw_capture_bounds small = bounds(); small.max_requests = 1;
     check(new_root(root), "request ceiling root"); report = run(root, GOOD, small); check(report.result != CGW_CAPTURE_COMPLETE, "work/request ceiling");
+    if (!mutant) {
+        cgw_capture_bounds long_graph = bounds(); long_graph.max_response_bytes = 1048576; long_graph.max_graph_nodes = 2000; long_graph.max_json_work = 16000000;
+        check(new_root(root), "long ancestry fixture root"); report = run(root, LONG_GRAPH, long_graph);
+        check(report.result == CGW_CAPTURE_COMPLETE && report.completed == 5, "retained X6 2000-node ancestry fixture completes within work bounds");
+    }
     check(new_root(root), "permission root"); (void)chmod(root, 0755);
     (void)cgw_capture(root, workspace, authorize, NULL, bounds(), &report); check(report.result == CGW_CAPTURE_REFUSED, "public-mode root refused");
     (void)chmod(root, 0700); char link[256]; (void)snprintf(link, sizeof(link), "%s-link", root); check(!symlink(root + 6, link), "synthetic symlink created");

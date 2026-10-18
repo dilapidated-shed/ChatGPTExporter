@@ -19,7 +19,7 @@
 #endif
 enum { CAPTURE_MAX_IDS = 1024, CAPTURE_MAX_NODES = 2048, CAPTURE_MAX_REQUESTS = 512, JOURNAL_LIMIT = 4194304 };
 typedef struct { char id[257], fingerprint[65], item_hash[65]; unsigned scope; } observed_id;
-typedef struct { char id[257], parent[257], message_id[257]; size_t token; } graph_node;
+typedef struct { char id[257], parent[257], message_id[257]; size_t token; int parent_index; unsigned color; } graph_node;
 typedef struct {
     int root, journal, lock;
     cgw_store *store;
@@ -268,6 +268,8 @@ static int graph(capture_state *s, const char *expected)
     size_t work = 0;
     for (unsigned i = 0; ok && i < count; ++i) {
         int parent = nodes[i].parent[0] ? graph_index(nodes, count, nodes[i].parent) : -1;
+        nodes[i].parent_index = parent; work += count;
+        if (work > s->bounds.max_json_work) { ok = reason(s, "graph_work_ceiling"); break; }
         if (nodes[i].parent[0] && parent < 0) { ok = reason(s, "unresolved_parent"); break; }
         size_t children = cj_member(&d, nodes[i].token, "children");
         if (children == CJ_MISSING || d.tokens[children].kind != CJ_ARRAY) { ok = reason(s, "malformed_children"); break; }
@@ -293,12 +295,20 @@ static int graph(capture_state *s, const char *expected)
                 }
             if (matches != 1) ok = reason(s, "nonreciprocal_parent");
         }
+    }
+    /* Retain the X6 fixture's iterative visited/completed ancestry rule.
+     * Resolve parents once; do not walk every ancestor again for every node. */
+    for (unsigned i = 0; ok && i < count; ++i) {
         int current = (int)i;
-        for (unsigned steps = 0; ok && current >= 0; ++steps) {
-            if (steps >= count) { ok = reason(s, "graph_cycle"); break; }
-            current = nodes[current].parent[0] ? graph_index(nodes, count, nodes[current].parent) : -1; work += count;
-            if (work > s->bounds.max_json_work) ok = reason(s, "graph_work_ceiling");
+        while (current >= 0 && nodes[current].color == 0) {
+            nodes[current].color = 1; current = nodes[current].parent_index; ++work;
         }
+        if (current >= 0 && nodes[current].color == 1) { ok = reason(s, "graph_cycle"); break; }
+        current = (int)i;
+        while (current >= 0 && nodes[current].color == 1) {
+            nodes[current].color = 2; current = nodes[current].parent_index; ++work;
+        }
+        if (work > s->bounds.max_json_work) ok = reason(s, "graph_work_ceiling");
     }
     size_t selected = cj_member(&d, 0, "current_node");
     if (ok && (selected == CJ_MISSING || !cj_text(&d, selected, id, sizeof(id)) || graph_index(nodes, count, id) < 0)) ok = reason(s, "unresolved_selected_node");

@@ -42,6 +42,10 @@ beyond a byte cap; it records that observation and never commits it. Journal
 bytes are bounded at 4 MiB. The parser caps depth at 64 and tokens at 32768.
 The fixture reports its process peak RSS, including TLS/test overhead; this is
 neither a handset measurement nor an account-size scaling claim.
+An adapted X6 2000-node null-message ancestry chain exercises the bounded long
+graph path. Parent indices are resolved once and iterative visited/completed
+states prevent repeated full ancestry walks. Key/edge lookup work remains
+explicitly bounded; this does not claim every parser operation is linear.
 
 `check-capture` makes genuine private on-disk captures, preserves a successful
 one via `build/capture-success.path`, and separately attacks corruption and
