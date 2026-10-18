@@ -23,6 +23,8 @@ jobs:
       - run: npm run check
       - name: Credential-free native web contract
         run: make -C native check
+      - name: Native bounded WebView bridge contract
+        run: make -C native check-webview
       - name: Host-only TLS fixture dependencies
         run: sudo apt-get install -y libcurl4-openssl-dev libssl-dev openssl
       - name: Native private content-addressed storage
