@@ -84,3 +84,39 @@ jobs:
         with:
           name: e1-android-evidence
           path: android/build/
+
+  c67-trial:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          run-id: 39095279328
+          github-token: ${{ github.token }}
+          name: e1-android-evidence
+          path: android/build
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: isomorphismes/wegert
+          ref: dfa3751f0282cdf6a2083c97063b0e8e996d0d92
+          path: fixture-signer
+          persist-credentials: false
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          packages: ''
+      - run: sdkmanager "build-tools;36.0.0"
+      - name: Sign verified E1 ARM64 bytes for C67 trial
+        run: make -C android c67-trial BUILD_TOOLS=$ANDROID_HOME/build-tools/36.0.0 KEYSTORE=${{ github.workspace }}/fixture-signer/_/build/app/wegert-debug.keystore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: chatgpt-exporter-c67-e1
+          path: |
+            android/build/chatgpt-exporter-c67-e1.apk
+            android/build/c67.sha256
+            android/build/c67-signature.txt
+            android/build/c67-manifest.txt
+            android/build/source-commit.txt

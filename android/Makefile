@@ -67,3 +67,19 @@ validate: build
 	unzip -l build/arm64-unsigned.apk > build/arm64-contents.txt
 	grep -q 'lib/arm64-v8a/libcgw_webview.so' build/arm64-contents.txt
 	grep -q 'classes3.dex' build/arm64-contents.txt
+
+# Explicitly requested C67 development trial; signs the qualified ARM64 input.
+.PHONY: c67-trial
+c67-trial:
+	printf '%s  build/arm64-unsigned.apk\n' '5df55daaec4ab50f3916d272f1239c5c2150d4de7862677840b76ade5d74764c' | sha256sum -c -
+	grep -qx '7ff59674079d57bea4e366f36ae455cd9d5fc3dc' build/source-commit.txt
+	keytool -exportcert -keystore "$(KEYSTORE)" -storetype PKCS12 -storepass wegert-debug -alias wegert-debug -file build/c67-cert.der
+	printf '%s  build/c67-cert.der\n' 'de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9' | sha256sum -c -
+	"$(BUILD_TOOLS)/zipalign" -P 16 -f 4 build/arm64-unsigned.apk build/c67-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" sign --ks "$(KEYSTORE)" --ks-type PKCS12 --ks-pass pass:wegert-debug --key-pass pass:wegert-debug --ks-key-alias wegert-debug --out build/chatgpt-exporter-c67-e1.apk build/c67-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" verify --verbose --print-certs build/chatgpt-exporter-c67-e1.apk > build/c67-signature.txt
+	grep -q 'certificate SHA-256 digest: de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9' build/c67-signature.txt
+	"$(BUILD_TOOLS)/zipalign" -c -P 16 4 build/chatgpt-exporter-c67-e1.apk
+	"$(BUILD_TOOLS)/aapt2" dump badging build/chatgpt-exporter-c67-e1.apk > build/c67-manifest.txt
+	grep -q "native-code: 'arm64-v8a'" build/c67-manifest.txt
+	sha256sum build/chatgpt-exporter-c67-e1.apk > build/c67.sha256
