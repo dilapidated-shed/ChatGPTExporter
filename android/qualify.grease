@@ -33,7 +33,7 @@ for mode in 0 1 2 3 4 5 6 7 8 {
         test "$ready" = true
         "$adb" shell uiautomator dump /sdcard/e1-controls.xml
         "$adb" pull /sdcard/e1-controls.xml "$output/controls-before.xml"
-        grep -q 'text="Check session"' "$output/controls-before.xml"
+        grep -q 'text="CHECK SESSION"' "$output/controls-before.xml"
         grep -q 'text="Ready - tap Check session"' "$output/controls-before.xml"
         "$adb" shell input tap 650 52
     }
