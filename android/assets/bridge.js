@@ -48,7 +48,10 @@
     return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   };
   const attach = event => {
-    if (event.source !== window || event.data !== bootstrap || event.ports.length !== 1) return;
+    // Native postWebMessage may have a null source. Child-frame postMessage
+    // has its child WindowProxy and still fails this check.
+    if ((event.source !== window && event.source !== null) ||
+        event.data !== bootstrap || event.ports.length !== 1) return;
     window.removeEventListener('message', attach);
     const port = event.ports[0];
     let busy = false;
@@ -61,17 +64,19 @@
           !fields[5].startsWith('/backend-api/') || fields[5].includes('://') ||
           !/^[A-Za-z0-9_-]*$/.test(fields[6])) return;
       busy = true;
+      const controller = new AbortController();
+      const deadline = setTimeout(() => controller.abort(), 30000);
       const reply = (status, sequence, final, payload = '') =>
         port.postMessage(`CGW1;reply;${fields[2]};${fields[3]};${status};${sequence};${final};${payload}`);
       try {
-        const sessionResponse = await fetch('/api/auth/session', { credentials: 'include', redirect: 'error' });
+        const sessionResponse = await fetch('/api/auth/session', { credentials: 'include', redirect: 'error', cache: 'no-store', signal: controller.signal });
         if (!sessionResponse.ok) { reply(sessionResponse.status, 0, 1); return; }
         const session = await boundedJson(sessionResponse);
         const token = session.accessToken;
         if (typeof token !== 'string' || !token.length || token.length > 16384) {
           reply(401, 0, 1); return;
         }
-        const options = { method: fields[4], credentials: 'include', redirect: 'error',
+        const options = { method: fields[4], credentials: 'include', redirect: 'error', cache: 'no-store', signal: controller.signal,
           headers: { Authorization: `Bearer ${token}`, 'X-Authorization': `Bearer ${token}` } };
         if (fields[4] === 'POST') {
           options.headers['Content-Type'] = 'application/json';
@@ -88,7 +93,7 @@
           reply(response.status, sequence, offset + chunk.length === body.length ? 1 : 0, base64(chunk));
         }
       } catch (_) { reply(502, 0, 1); }
-      finally { busy = false; }
+      finally { clearTimeout(deadline); busy = false; }
     };
     port.start();
     port.postMessage(`CGW1;ready;${bootstrap}`);

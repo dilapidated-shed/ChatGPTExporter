@@ -42,3 +42,7 @@ unsigned; E4 owns its stable identity, signing and delivery.
 Host VM tests exercise the static page transport. Actual Android messaging
 requires the separate emulator run. Neither proves physical C67 sign-in,
 authenticated history coverage, export, resume or independent ai-ci acceptance.
+
+The native build explicitly uses NDK 29.0.14206865. The shared build-policy
+record retains the unqualified ICK/JNI gap; these are NDK candidate builds,
+not proof of an ICK-produced or independently accepted Android toolchain.

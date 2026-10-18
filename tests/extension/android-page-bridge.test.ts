@@ -25,15 +25,15 @@ function setup(options: { frame?: boolean; origin?: string; responses?: Response
   const responses = [...(options.responses ?? [])];
   runInNewContext(source.replace('__CGW_BOOTSTRAP__', bootstrap), {
     window, location: { origin: options.origin ?? 'https://chatgpt.com' },
-    TextEncoder, TextDecoder, Uint8Array, atob, btoa,
+    TextEncoder, TextDecoder, Uint8Array, atob, btoa, AbortController, setTimeout, clearTimeout,
     fetch: async (path: string, options: RequestInit) => {
       requests.push({ path, options });
       if (!responses.length) throw new Error('unexpected network');
       return responses.shift();
     },
   });
-  const attach = (data = bootstrap, sameFrame = true) =>
-    listener?.({ source: sameFrame ? window : {}, data, ports: [port] });
+  const attach = (data = bootstrap, sameFrame: boolean | null = true) =>
+    listener?.({ source: sameFrame === null ? null : sameFrame ? window : {}, data, ports: [port] });
   return { messages, requests, port, attach, hasListener: () => !!listener };
 }
 
@@ -55,6 +55,12 @@ describe('Android page transport, synthetic host VM only', () => {
     test.attach();
     expect(test.messages).toEqual([`CGW1;ready;${bootstrap}`]);
     expect(test.hasListener()).toBe(false);
+  });
+
+  it('accepts a native null-source bootstrap with the exact capability', () => {
+    const test = setup();
+    test.attach(bootstrap, null);
+    expect(test.messages).toEqual([`CGW1;ready;${bootstrap}`]);
   });
 
   it('keeps signed-out and expired sessions data-free', async () => {
@@ -107,5 +113,13 @@ describe('Android page transport, synthetic host VM only', () => {
     await test.port.onmessage?.({ data: 'x'.repeat(16385) });
     expect(test.requests).toEqual([]);
     expect(test.messages.length).toBe(1);
+  });
+
+  it('rejects oversized decoded responses without publishing a chunk', async () => {
+    const test = setup({ responses: [json({ accessToken: 'synthetic-token' }),
+      new Response('x'.repeat(5_000_001), { headers: { 'content-type': 'application/json' } })] });
+    test.attach();
+    await test.port.onmessage?.({ data: command });
+    expect(test.messages).toEqual([`CGW1;ready;${bootstrap}`, `CGW1;reply;${nonce};1;502;0;1;`]);
   });
 });

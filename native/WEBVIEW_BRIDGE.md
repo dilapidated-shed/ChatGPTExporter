@@ -1,10 +1,10 @@
 # Native WebView bridge contract
 
-`cgw_webview_bridge.[ch]` is the C11 trust boundary for a future Android
-WebView sign-in shell. It does not create a WebView, perform JNI calls, obtain
+`cgw_webview_bridge.[ch]` is the C11 trust boundary for the candidate Android
+WebView sign-in shell under `android/`. This library does not create a WebView, perform JNI calls, obtain
 credentials, execute JavaScript, persist a response, or issue network I/O.
-Those Android-facing pieces require a separately built and reviewed platform
-adapter.
+The separate native platform adapter and direct-DEX callback classes require
+their own Android build and emulator evidence; see `android/TESTING.md`.
 
 The bridge accepts typed operations only through `cgw_resolve`. It then emits
 one ASCII command for an already verified document:

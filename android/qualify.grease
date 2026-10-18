@@ -8,19 +8,24 @@ test -f "$apk"
 test ! -e "$output"
 mkdir -p "$output"
 "$adb" shell getprop ro.product.cpu.abi > "$output/abi.txt"
+"$adb" shell getprop ro.build.fingerprint > "$output/build-fingerprint.txt"
 grep -qx x86_64 "$output/abi.txt"
 "$adb" install -r "$apk"
 var installed = "$("$adb" shell pm path org.isomorphisms.chatgptexporter.e1fixture | tr -d '\r' | sed 's/^package://')"
 test -n "$installed"
 "$adb" pull "$installed" "$output/installed.apk"
 cmp "$apk" "$output/installed.apk"
-for mode in 0 1 2 3 4 {
+for mode in 0 1 2 3 4 5 6 7 8 {
     "$adb" shell am force-stop org.isomorphisms.chatgptexporter.e1fixture
     "$adb" logcat -c
     "$adb" shell am start -W -n org.isomorphisms.chatgptexporter.e1fixture/org.isomorphisms.webview.BridgeActivity --ei fixture "$mode"
     var expected = 'probe:complete'
     if test "$mode" = 1 || test "$mode" = 2 { setvar expected = 'probe:http:401' }
     if test "$mode" = 3 || test "$mode" = 4 { setvar expected = 'probe:http:502' }
+    if test "$mode" = 5 { setvar expected = 'navigation:request_cancelled' }
+    if test "$mode" = 6 { setvar expected = 'navigation:external_or_federated_refused' }
+    if test "$mode" = 7 { setvar expected = 'message:oversize_rejected' }
+    if test "$mode" = 8 { setvar expected = 'replay_rejected' }
     var passed = 'false'
     for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
         "$adb" logcat -d -s CGW-E1:I > "$output/mode-$mode.log"

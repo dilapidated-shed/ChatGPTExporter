@@ -5,18 +5,23 @@ CC_X86_64 ?=
 BUILD_TOOLS ?=
 ANDROID_JAR ?=
 DEX_DIR ?=
+DEX_SOURCE ?=
 KEYSTORE ?=
 CERT_SHA256 ?=
 NATIVE = ../native/cgw_web.c ../native/cgw_webview_bridge.c cgw_webview_android.c
 FLAGS = -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -Wl,-z,max-page-size=16384 -I../native
 
-.PHONY: build native fixture validate verify-grease
+.PHONY: build native fixture validate verify-grease verify-dex
 native: build/lib/arm64-v8a/libcgw_webview.so build/fixture/lib/x86_64/libcgw_webview.so
 verify-grease:
 	printf '%s  %s\n' '7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c' '$(GREASE)' | sha256sum -c -
 	chmod +x "$(GREASE)"
 	ASAN_OPTIONS=detect_leaks=0 "$(GREASE)" -n qualify.grease > /dev/null
-build: build/arm64-unsigned.apk build/fixture-unsigned.apk
+build: verify-dex build/arm64-unsigned.apk build/fixture-unsigned.apk
+
+verify-dex:
+	test -n "$(DEX_SOURCE)"
+	grep -qx "$(DEX_SOURCE)" "$(DEX_DIR)/source-commit.txt"
 
 build/lib/arm64-v8a/libcgw_webview.so: $(NATIVE)
 	test -x "$(CC_ARM64)"
@@ -55,6 +60,8 @@ fixture: build/fixture-unsigned.apk
 
 validate: build
 	sha256sum build/arm64-unsigned.apk build/fixture-unsigned.apk build/lib/arm64-v8a/libcgw_webview.so build/fixture/lib/x86_64/libcgw_webview.so > build/build.sha256
+	sha256sum AndroidManifest.xml assets/bridge.js cgw_webview_android.c "$(DEX_DIR)/classes.dex" "$(DEX_DIR)/classes2.dex" "$(DEX_DIR)/classes3.dex" >> build/build.sha256
+	"$(CC_ARM64)" --version > build/compiler.txt
 	git rev-parse HEAD > build/source-commit.txt
 	"$(BUILD_TOOLS)/aapt2" dump badging build/arm64-unsigned.apk > build/arm64-manifest.txt
 	unzip -l build/arm64-unsigned.apk > build/arm64-contents.txt

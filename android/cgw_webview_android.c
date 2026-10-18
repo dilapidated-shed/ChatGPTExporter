@@ -65,6 +65,15 @@ static void report(const char *result)
     __android_log_print(ANDROID_LOG_INFO, TAG, "%s", result);
 }
 
+static void show_status(JNIEnv *env, const char *text)
+{
+    if (!activity) return;
+    jmethodID title = method(env, activity, "setTitle", "(Ljava/lang/CharSequence;)V");
+    jstring value = (*env)->NewStringUTF(env, text);
+    if (title && value) (*env)->CallVoidMethod(env, activity, title, value);
+    if (value) (*env)->DeleteLocalRef(env, value);
+}
+
 static int trusted_url(JNIEnv *env, jstring value)
 {
     if (!value) return 0;
@@ -114,7 +123,8 @@ static void revoke(JNIEnv *env)
         (*env)->DeleteGlobalRef(env, active_port);
         active_port = NULL;
     }
-    if (bridge) cgw_webview_bridge_navigation_started(bridge);
+    if (bridge && cgw_webview_bridge_navigation_started(bridge) == CGW_WEBVIEW_NAVIGATION_CANCELLED)
+        report("navigation:request_cancelled");
     memset(bootstrap, 0, sizeof(bootstrap));
 }
 
@@ -265,6 +275,7 @@ static void on_message(JNIEnv *env, jobject self, jobject port, jobject message)
         if (cgw_webview_bridge_port_ready(bridge) == CGW_WEBVIEW_OK) {
             port_verified = 1;
             report("port:ready");
+            show_status(env, "ChatGPT - session check available in menu");
 #ifdef CGW_WEBVIEW_SYNTHETIC
             probe(env);
 #endif
@@ -278,8 +289,14 @@ static void on_message(JNIEnv *env, jobject self, jobject port, jobject message)
             char status[32];
             snprintf(status, sizeof(status), "probe:http:%u", observation.http_status);
             report(status);
+            show_status(env, observation.http_status == 401 || observation.http_status == 403
+                                ? "Sign in on the page, then check session"
+                                : "Session check failed - retry from menu");
         }
-        if (observation.complete) report("probe:complete");
+        if (observation.complete) {
+            report("probe:complete");
+            show_status(env, "Session check passed - no archive written");
+        }
     } else report("message:bootstrap_rejected");
     (*env)->ReleaseStringUTFChars(env, value, wire);
 }
@@ -293,6 +310,7 @@ static void on_started(JNIEnv *env, jobject self, jobject view, jstring url, job
             jmethodID stop = method(env, view, "stopLoading", "()V");
             if (stop) (*env)->CallVoidMethod(env, view, stop);
             report("navigation:external_or_federated_refused");
+            show_status(env, "External or federated sign-in refused");
         }
     }
 }
@@ -313,7 +331,9 @@ static jboolean override_url(JNIEnv *env, jobject self, jobject view, jobject re
     /* E1 supports first-party navigation. Federated providers are explicitly
      * refused until their sign-in path has its own qualification. */
     if (!trusted_url(env, url) && !login_url(env, url)) {
-        report("navigation:external_or_federated_refused"); return JNI_TRUE;
+        report("navigation:external_or_federated_refused");
+        show_status(env, "External or federated sign-in refused");
+        return JNI_TRUE;
     }
     return JNI_FALSE;
 }
@@ -347,6 +367,26 @@ static jobject intercept(JNIEnv *env, jobject self, jobject view, jobject reques
         mime = "text/html";
         body = "<!doctype html><meta charset=utf-8><title>E1 synthetic sign-in</title>"
                "<h1>Synthetic fixture only</h1><p>No live account or network</p>";
+        if (mode == 5) body =
+            "<!doctype html><title>E1 interruption fixture</title><script>"
+            "const originalFetch=fetch;window.fetch=(path,opts)=>path.startsWith('/backend-api/')?"
+            "new Promise(resolve=>setTimeout(()=>resolve(originalFetch(path,opts)),10000)):originalFetch(path,opts);"
+            "addEventListener('message',e=>{if(e.ports.length===1)setTimeout(()=>"
+            "location.href='/e1-interrupted',1000)});</script>";
+        if (mode == 6) body =
+            "<!doctype html><title>E1 origin fixture</title>"
+            "<script>addEventListener('message',e=>{if(e.ports.length===1)setTimeout(()=>"
+            "location.href='https://evil.example/',1000)});</script>";
+        if (mode == 7) body =
+            "<!doctype html><title>E1 oversize message fixture</title><script>"
+            "addEventListener('message',e=>{if(e.ports.length===1)setTimeout(()=>"
+            "e.ports[0].postMessage('x'.repeat(16385)),300)});</script>";
+        if (mode == 8) body =
+            "<!doctype html><title>E1 forged message fixture</title><script>"
+            "const originalFetch=fetch;window.fetch=(path,opts)=>path.startsWith('/backend-api/')?"
+            "new Promise(resolve=>setTimeout(()=>resolve(originalFetch(path,opts)),2000)):originalFetch(path,opts);"
+            "addEventListener('message',e=>{if(e.ports.length===1)setTimeout(()=>"
+            "e.ports[0].postMessage('CGW1;reply;00000000000000000000000000000000;999;200;0;1;eA'),300)});</script>";
     } else if (url && strcmp(url, "https://chatgpt.com/api/auth/session") == 0) {
         body = mode == 1 ? "{}" : "{\"accessToken\":\"e1-synthetic-token\"}";
     } else if (url && strstr(url, "https://chatgpt.com/backend-api/") == url) {
@@ -459,7 +499,7 @@ static void on_create(JNIEnv *env, jobject self, jobject bundle)
     jstring url = (*env)->NewStringUTF(env, "https://chatgpt.com/");
 #endif
     (*env)->CallVoidMethod(env, view, load, url);
-    report("shell:interactive_sign_in_ready");
+    if (!(*env)->ExceptionCheck(env)) report("shell:interactive_sign_in_ready");
 }
 
 static void on_destroy(JNIEnv *env, jobject self)
