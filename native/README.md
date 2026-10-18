@@ -4,7 +4,9 @@ This directory is a **credential-free native C request planner**, not yet a
 headless exporter or an authenticated ChatGPT client. It builds the current
 allowlisted ChatGPT web-history requests from typed operations and refuses
 unbounded, arbitrary, or destructive requests. In particular, the sole POST is
-the bounded, **read-only** conversation-batch lookup.
+the bounded, **read-only** conversation-batch lookup. It also contains a
+host-tested WebView message-boundary candidate; see
+[the bridge contract](WEBVIEW_BRIDGE.md).
 
 The existing Chromium extension **remains usable and unchanged**. Its browser
 page bridge currently supplies authenticated same-origin access, and the
@@ -16,6 +18,7 @@ that Chrome has been removed or that a real account has been exported.
 ## Test
 
     make -C native check
+    make -C native check-webview
 
 The tests contain only synthetic identifiers, compare exact paths and JSON,
 reject hostile identifiers/cursors/scope/batches, and test that failures
@@ -37,8 +40,8 @@ publish no partial request. This source has no third-party runtime dependency.
   token-containing responses remain **outside** this library. A public OpenAI API
   key does **not** authorize ChatGPT web-history access. Do not solicit,
   print, copy from browser profiles, or persist bearer tokens or cookies.
-  A safe consented sign-in adapter is an unresolved prerequisite for
-  browserless live capture. Browser-mediated login may remain necessary.
+  The native bridge can accept only a verified page-port response; it is not an
+  Android activity or a completed sign-in adapter.
 - Provider paths are private, undocumented contracts and may change. Treat
   an HTTP/schema drift as explicit failure and preserve private source
   evidence; no guessed fallback.
