@@ -38,13 +38,15 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           repository: isomorphisms/ai-ci
-          ref: 42ea494e882cfee8c06b8a1cab7a7a710895399a
+          ref: e2a809a50fd1649c3a9216f438577592192d2626
           path: independent-acceptance
           persist-credentials: false
       - name: Independent host fixture verifier, not production ICK acceptance
         run: cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic independent-acceptance/native-capture/check.c -lcrypto -o native/build/independent-capture-host
       - name: Independent raw-oracle, private-mode, marker and report checks
         run: native/build/independent-capture-host "$GITHUB_WORKSPACE/native" "$GITHUB_WORKSPACE/native/fixtures/capture" "$GITHUB_WORKSPACE/.github/workflows/check.yml"
+      - name: Independently reject actual bad mutant disk outputs
+        run: native/build/independent-capture-host --reject-mutants "$GITHUB_WORKSPACE/native" "$GITHUB_WORKSPACE/native/fixtures/capture" "$GITHUB_WORKSPACE/.github/workflows/check.yml"
       - name: Retained skipped-trigger mutant
         run: native/build/independent-capture-host --reject-skipped-trigger independent-acceptance/native-capture/fixtures/skipped-trigger.yml
       - name: Preserve synthetic host evidence
@@ -56,4 +58,5 @@ jobs:
           path: |
             native/build/capture-host.log
             native/build/capture-success.path
+            native/build/mutant-*.path
             native/build/capture-*/**

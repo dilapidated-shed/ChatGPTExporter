@@ -221,6 +221,14 @@ static int find_name(const char *root, const char *prefix, char out[512])
     }
     closedir(dir); return found;
 }
+static void save_location(const char *root, const char *name)
+{
+    char path[128]; (void)snprintf(path, sizeof(path), "build/%s.path", name);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    FILE *file = fd >= 0 ? fdopen(fd, "w") : NULL;
+    check(file != NULL && fprintf(file, "%s\n", root) > 0, "private artifact-case location retained");
+    if (file) check(!fclose(file), "artifact-case location close");
+}
 static void verify_raw_oracle(const char *root)
 {
     char objects[512]; (void)snprintf(objects, sizeof(objects), "%s/objects", root);
@@ -262,6 +270,7 @@ int main(int argc, char **argv)
     cgw_capture_report report = run(root, GOOD, bounds());
 #ifdef CGW_MUTANT_SILENT_OMISSION
     killed_expected_mutant = report.result == CGW_CAPTURE_COMPLETE && report.expected == 5 && report.completed == 4;
+    if (mutant && killed_expected_mutant) save_location(root, "mutant-omission");
 #endif
     check(report.result == CGW_CAPTURE_COMPLETE && report.expected == 5 && report.completed == 5, "end-to-end main and archived capture");
     check(!report.full_account_export_complete, "incomplete-account reporting");
@@ -270,11 +279,7 @@ int main(int argc, char **argv)
     report = run(root, GOOD, bounds());
     check(report.result == CGW_CAPTURE_COMPLETE && report.reused == 5 && report.requests == 10, "resume revalidates all markers and raw hashes");
     printf("capture_root\t%s\ninventory_sha256\t%s\nvalidation_sha256\t%s\n", root, report.inventory_sha256, report.report_sha256);
-    if (!mutant) {
-        FILE *location = fopen("build/capture-success.path", "w");
-        check(location != NULL && fprintf(location, "%s\n", root) > 0, "retained genuine private capture location");
-        if (location) check(!fclose(location), "capture location durable close");
-    }
+    if (!mutant) save_location(root, "capture-success");
     char private_report[512]; check(find_name(root, "validation-", private_report), "on-disk validation report exists");
     check(new_root(root), "separate corrupt-object fixture root"); report = run(root, GOOD, bounds());
     char path[512];
@@ -289,6 +294,7 @@ int main(int argc, char **argv)
                 report = run(root, GOOD, bounds()); check(report.result != CGW_CAPTURE_COMPLETE, "corrupt object and invalid marker reuse refused");
 #ifdef CGW_MUTANT_INVALID_MARKER
                 killed_expected_mutant = report.result == CGW_CAPTURE_COMPLETE;
+                if (mutant && killed_expected_mutant) save_location(root, "mutant-marker");
 #endif
             } else check(0, "completion marker has a raw object hash");
         } else check(0, "completion marker readable");
@@ -302,7 +308,9 @@ int main(int argc, char **argv)
         check(report.result != CGW_CAPTURE_COMPLETE, names[i]);
         if (rejected[i] == SECRET_ECHO) check(report.received_chunks >= 2, "reflected token actually crossed transport callback chunks");
 #ifdef CGW_MUTANT_PREMATURE_COMPLETE
-        if (rejected[i] == SHORT_TOTAL && report.result == CGW_CAPTURE_COMPLETE) killed_expected_mutant = 1;
+        if (rejected[i] == SHORT_TOTAL && report.result == CGW_CAPTURE_COMPLETE) {
+            killed_expected_mutant = 1; if (mutant) save_location(root, "mutant-premature");
+        }
 #endif
         check(!report.full_account_export_complete, "adverse case never declares full account complete");
     }
