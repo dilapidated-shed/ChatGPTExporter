@@ -48,10 +48,9 @@ export class ChatGptDetailFetcher {
 
     for (let offset = 0; offset < regular.length; offset += this.batchSize) {
       const group = regular.slice(offset, offset + this.batchSize);
-      const result = await this.fetchBatch(group);
+      const result = await this.fetchBatch(group, checkpoint);
       if (result.batch) batches.push(result.batch);
       output.push(...result.conversations);
-      await checkpoint?.({ batches: result.batch ? [result.batch] : [], conversations: result.conversations });
     }
     for (const conversation of shared) {
       const retrieved = await this.fetchShared(conversation, shareIdFor(conversation)!);
@@ -67,7 +66,7 @@ export class ChatGptDetailFetcher {
     return { batches, conversations: output };
   }
 
-  private async fetchBatch(group: InventoryConversation[]): Promise<{ batch: RawBatchCapture | null; conversations: RetrievedConversationDetail[] }> {
+  private async fetchBatch(group: InventoryConversation[], checkpoint?: DetailCaptureCheckpoint): Promise<{ batch: RawBatchCapture | null; conversations: RetrievedConversationDetail[] }> {
     const requestedIds = group.map((conversation) => conversation.conversationId);
     let response: Awaited<ReturnType<ChatGptTransport["request"]>>;
     try {
@@ -78,7 +77,11 @@ export class ChatGptDetailFetcher {
     } catch (error) {
       if (!isHttpStatus(error, 404)) throw error;
       const conversations: RetrievedConversationDetail[] = [];
-      for (const conversation of group) conversations.push(await this.fetchCurrent(conversation, "batch_http_404"));
+      for (const conversation of group) {
+        const retrieved = await this.fetchCurrent(conversation, "batch_http_404");
+        conversations.push(retrieved);
+        await checkpoint?.({ batches: [], conversations: [retrieved] });
+      }
       return { batch: null, conversations };
     }
     const candidates = batchCandidates(response.body);
@@ -92,7 +95,8 @@ export class ChatGptDetailFetcher {
         parsed = parseConversationDetail(raw);
         id = parsed.id ?? parsed.conversation_id ?? null;
         if (!id || !requestedIds.includes(id)) continue;
-        if (!hasOnlySafeCompactNullRoot(raw) || graphFindings(parsed).length) issue = "batch_graph_suspicious";
+        if (hasConflictingConversationAliases(raw)) issue = "batch_invalid";
+        else if (!hasOnlySafeCompactNullRoot(raw) || graphFindings(parsed).length) issue = "batch_graph_suspicious";
       } catch (error) {
         if (!(error instanceof EnvelopeError)) throw error;
         id = looseConversationId(raw);
@@ -110,34 +114,38 @@ export class ChatGptDetailFetcher {
     const returnedIds = requestedIds.filter((id) => candidateById.has(id));
     const missingIds = requestedIds.filter((id) => !candidateById.has(id));
     const suspiciousIds = requestedIds.filter((id) => candidateById.get(id)?.issue !== undefined);
+    // The complete batch response is already available; publish it with each
+    // independently validated conversation before a later fallback can fail.
+    const batch: RawBatchCapture = {
+      requestedConversationIds: requestedIds,
+      returnedConversationIds: returnedIds,
+      missingConversationIds: missingIds,
+      suspiciousConversationIds: [...new Set([...suspiciousIds, ...duplicateIds])],
+      response: response.body,
+      responseBytes: response.responseBytes,
+      correlationId: response.correlationId,
+    };
     const conversations: RetrievedConversationDetail[] = [];
     for (const conversation of group) {
       const candidate = candidateById.get(conversation.conversationId);
+      let retrieved: RetrievedConversationDetail;
       if (!candidate || candidate.issue || !candidate.parsed) {
-        conversations.push(await this.fetchCurrent(conversation, candidate?.issue ?? "batch_missing"));
+        retrieved = await this.fetchCurrent(conversation, candidate?.issue ?? "batch_missing");
       } else {
-        conversations.push({
+        retrieved = {
           inventory: conversation,
           detail: candidate.parsed,
           raw: candidate.raw,
           source: "batch",
           correlationId: response.correlationId,
           responseBytes: response.responseBytes,
-        });
+        };
       }
+      conversations.push(retrieved);
+      // Never wait for the whole group to succeed before persisting a finished unit.
+      await checkpoint?.({ batches: [batch], conversations: [retrieved] });
     }
-    return {
-      batch: {
-        requestedConversationIds: requestedIds,
-        returnedConversationIds: returnedIds,
-        missingConversationIds: missingIds,
-        suspiciousConversationIds: [...new Set([...suspiciousIds, ...duplicateIds])],
-        response: response.body,
-        responseBytes: response.responseBytes,
-        correlationId: response.correlationId,
-      },
-      conversations,
-    };
+    return { batch, conversations };
   }
 
   private async fetchCurrent(conversation: InventoryConversation, fallbackReason: BatchFallbackReason): Promise<RetrievedConversationDetail> {
@@ -157,7 +165,11 @@ export class ChatGptDetailFetcher {
     const initial = jsonObject(initialResponse.body, "paginated conversation initial response");
     const pages: JsonValue[] = [];
     const messages = new Map<string, JsonValue>();
-    let chronologicalIds: string[] = [];
+    // Process pages newest first without copying the accumulated history for
+    // each new page. Ordinals represent the order, independent of page width.
+    const chronologicalGroups: string[][] = [];
+    const ordinalById = new Map<string, number>();
+    let oldestOrdinal = 0;
     const seenCursors = new Set<string>();
     let currentNode: string | null | undefined;
     let responseBytes = 0;
@@ -181,6 +193,7 @@ export class ChatGptDetailFetcher {
       });
       responseBytes += response.responseBytes;
 
+      assertPaginationOverlap(ordinalById, page.messages.map((message) => message.id));
       const freshIds: string[] = [];
       for (const message of page.messages) {
         const existing = messages.get(message.id);
@@ -193,7 +206,10 @@ export class ChatGptDetailFetcher {
         messages.set(message.id, message.raw);
         freshIds.push(message.id);
       }
-      chronologicalIds = [...freshIds, ...chronologicalIds];
+      for (let position = freshIds.length - 1; position >= 0; position -= 1) {
+        ordinalById.set(freshIds[position]!, --oldestOrdinal);
+      }
+      chronologicalGroups.push(freshIds);
 
       if (!page.hasPreviousPage) {
         complete = true;
@@ -217,6 +233,7 @@ export class ChatGptDetailFetcher {
     if (!complete) {
       throw new DetailCaptureError("PAGINATION_PAGE_LIMIT", `Conversation ${conversation.conversationId} exceeded the pagination page limit.`);
     }
+    const chronologicalIds = chronologicalGroups.reverse().flat();
     if (chronologicalIds.length === 0) {
       throw new DetailCaptureError("PAGINATION_EMPTY", `Conversation ${conversation.conversationId} returned no messages.`);
     }
@@ -304,6 +321,9 @@ export class ChatGptDetailFetcher {
   private async fetchShared(conversation: InventoryConversation, shareId: string): Promise<RetrievedConversationDetail> {
     const response = await this.transport.request({ operation: "shared_detail", parameters: { shareId } }, this.workspace.accountId, 120_000);
     const detail = parseConversationDetail(response.body);
+    if (hasConflictingConversationAliases(response.body)) {
+      throw new DetailCaptureError("DETAIL_IDENTITY_CONFLICT", "Shared conversation response contains conflicting identity aliases.");
+    }
     const findings = graphFindings(detail);
     if (findings.length) throw new DetailCaptureError("SHARED_GRAPH_INVALID", `Shared detail ${shareId} is invalid: ${findings.join(", ")}`);
     return {
@@ -317,27 +337,41 @@ export class ChatGptDetailFetcher {
   }
 }
 
+/**
+ * Diagnose graph structure in bounded linear work. A chain leading to a
+ * previously inspected root/cycle is not repeatedly traversed.
+ *
+ * The iterative walk avoids JS recursion-depth failures on long histories.
+ */
 export function graphFindings(detail: ChatGptConversationDetail): string[] {
   const findings: string[] = [];
   const nodes = detail.mapping;
   const ids = new Set(Object.keys(nodes));
+  const parentById = new Map<string, string | null>();
   if (ids.size === 0) findings.push("mapping_empty");
   if (detail.current_node && !ids.has(detail.current_node)) findings.push("current_node_missing");
   for (const [id, node] of Object.entries(nodes)) {
-    if (node.parent !== null && !ids.has(node.parent)) findings.push(`parent_missing:${id}`);
+    const parent = node.parent;
+    parentById.set(id, parent);
+    if (parent !== null && !ids.has(parent)) findings.push(`parent_missing:${id}`);
     for (const child of node.children) if (!ids.has(child)) findings.push(`child_missing:${id}`);
   }
+  const completed = new Set<string>();
   for (const start of ids) {
-    const seen = new Set<string>();
+    if (completed.has(start)) continue;
+    const visiting = new Set<string>();
+    const traversed: string[] = [];
     let current: string | null = start;
-    while (current !== null) {
-      if (seen.has(current)) {
-        findings.push(`cycle:${start}`);
+    while (current !== null && ids.has(current) && !completed.has(current)) {
+      if (visiting.has(current)) {
+        findings.push(`cycle:${current}`);
         break;
       }
-      seen.add(current);
-      current = nodes[current]?.parent ?? null;
+      visiting.add(current);
+      traversed.push(current);
+      current = parentById.get(current) ?? null;
     }
+    for (const nodeId of traversed) completed.add(nodeId);
   }
   return [...new Set(findings)].sort();
 }
@@ -390,7 +424,7 @@ interface ParsedPaginatedPage {
   startCursor: string | null;
 }
 
-function parsePaginatedPage(value: JsonValue, pageNumber: number): ParsedPaginatedPage {
+export function parsePaginatedPage(value: JsonValue, pageNumber: number): ParsedPaginatedPage {
   const object = jsonObject(value, `paginated conversation page ${pageNumber}`);
   if (!Array.isArray(object.messages)) {
     throw new DetailCaptureError("PAGINATION_INVALID_PAGE", `Paginated conversation page ${pageNumber} messages must be an array.`);
@@ -419,6 +453,9 @@ function parsePaginatedPage(value: JsonValue, pageNumber: number): ParsedPaginat
     startCursor = pageInfo.start_cursor;
   }
 
+  if (hasConflictingConversationAliases(object)) {
+    throw new DetailCaptureError("PAGINATION_IDENTITY_CONFLICT", "Paginated conversation page " + pageNumber + " contains conflicting identity aliases.");
+  }
   const identity = object.conversation_id ?? object.id;
   if (identity !== undefined && (typeof identity !== "string" || identity.length === 0)) {
     throw new DetailCaptureError("PAGINATION_INVALID_IDENTITY", `Paginated conversation page ${pageNumber} conversation identity is invalid.`);
@@ -434,6 +471,32 @@ function parsePaginatedPage(value: JsonValue, pageNumber: number): ParsedPaginat
     hasPreviousPage: pageInfo.has_previous_page,
     startCursor,
   };
+}
+
+/** Check all relative order constraints from already fetched newer pages. */
+export function assertPaginationOverlap(
+  knownChronologicalIds: readonly string[] | ReadonlyMap<string, number>,
+  olderPageIds: readonly string[],
+): void {
+  const index = Array.isArray(knownChronologicalIds)
+    ? new Map<string, number>(knownChronologicalIds.map((id, position): [string, number] => [id, position]))
+    : knownChronologicalIds as ReadonlyMap<string, number>;
+  let lastSeen = Number.NEGATIVE_INFINITY;
+  let encounteredKnown = false;
+  for (const id of olderPageIds) {
+    const position = index.get(id);
+    if (position === undefined) {
+      if (encounteredKnown) {
+        throw new DetailCaptureError("PAGINATION_ORDER_CONFLICT", "An older page introduced a new message after a previously retrieved message.");
+      }
+      continue;
+    }
+    encounteredKnown = true;
+    if (position <= lastSeen) {
+      throw new DetailCaptureError("PAGINATION_ORDER_CONFLICT", "Overlapping messages disagree on their relative chronological order.");
+    }
+    lastSeen = position;
+  }
 }
 
 function assertPaginatedIdentity(requestedId: string, returnedId: string | null, required: boolean): void {
@@ -459,7 +522,7 @@ function canonicalJson(value: JsonValue): string {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key]!)}`).join(",")}}`;
 }
 
-function linearRootId(conversationId: string, messageIds: Set<string>): string {
+export function linearRootId(conversationId: string, messageIds: Set<string>): string {
   const base = `paginated_root_${conversationId}`.slice(0, 240);
   let candidate = base;
   let suffix = 0;
@@ -474,6 +537,12 @@ function isHttpStatus(error: unknown, status: number): boolean {
   return Boolean(error && typeof error === "object" && "status" in error && (error as { status?: unknown }).status === status);
 }
 
+function hasConflictingConversationAliases(value: JsonValue): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const object = value as Record<string, JsonValue>;
+  return object.id !== undefined && object.conversation_id !== undefined && object.id !== object.conversation_id;
+}
+
 function looseConversationId(value: JsonValue): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const object = value as Record<string, JsonValue>;
@@ -484,6 +553,9 @@ function looseConversationId(value: JsonValue): string | null {
 }
 
 function assertRequestedIdentity(requestedId: string, detail: ChatGptConversationDetail): void {
+  if (detail.id && detail.conversation_id && detail.id !== detail.conversation_id) {
+    throw new DetailCaptureError("DETAIL_IDENTITY_CONFLICT", "Legacy conversation response contains conflicting identity aliases.");
+  }
   const returnedId = detail.id ?? detail.conversation_id;
   if (returnedId !== requestedId) throw new DetailCaptureError("DETAIL_ID_MISMATCH", `Requested ${requestedId} but ChatGPT returned ${returnedId ?? "no id"}.`);
 }

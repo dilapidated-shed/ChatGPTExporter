@@ -2,14 +2,16 @@ import { CaptureStore, type RawCompletionMarker } from "../core/capture-store";
 import type { ArchiveFileSystem } from "../core/filesystem";
 import { sha256Hex } from "../core/hash";
 import { renderConversationMarkdown } from "../core/markdown";
-import { conversationBasePath } from "../core/paths";
+import { conversationBasePath, legacyConversationBasePath } from "../core/paths";
 import { parseJson, prettyJson } from "../core/serialization";
 import type { ConversationInventory, InventoryConversation, InventoryProject, JsonValue, ProjectAssetIndex, SafeFailure } from "../core/types";
 import { ChatGptDetailFetcher, type RawBatchCapture, type RetrievedConversationDetail } from "./capture";
 import type { ChatGptTransport, DiscoveredWorkspace } from "./client";
 import { parseConversationDetail } from "./envelopes";
-import { NORMALIZER_VERSION, normalizeConversation } from "./normalize";
-import { ChatGptAssetManager } from "./assets";
+import { NORMALIZER_VERSION, normalizeConversation, linkNormalizedAssets } from "./normalize";
+import { ChatGptAssetManager, assetReferenceFindings, verifyPhysicalAssetRecords } from "./assets";
+import { validateInventoryEvidence } from "./inventory-evidence";
+import { validateConversationEvidence } from "./evidence";
 import { AccountArtifactCapture } from "./account-artifacts";
 
 export interface ConversationCompletionMarker {
@@ -80,6 +82,9 @@ export class ChatGptCaptureEngine {
 
   async run(): Promise<CaptureRunResult> {
     const inventory = this.requireInventory(parseJson<ConversationInventory>(await this.options.filesystem.readText("inventory.json")));
+    const inventoryEvidence = await validateInventoryEvidence(this.options.filesystem, inventory);
+    if (inventoryEvidence.errors.length) throw new Error("Authoritative inventory evidence is invalid; capture/resume cannot use it.");
+    await assertSafeConversationPaths(this.options.filesystem, inventory.conversations);
     const store = new CaptureStore(this.options.filesystem, this.options.runId, this.options.workspace.workspaceFingerprint, this.now);
     await store.start();
     const result: CaptureRunResult = {
@@ -223,7 +228,8 @@ export class ChatGptCaptureEngine {
     if (normalized.findings.some((finding) => finding.severity === "error")) throw new Error(`Normalization produced graph errors for ${conversation.conversationId}.`);
     const assets = this.options.includeAssets === false
       ? { schemaVersion: 1 as const, conversationId: conversation.conversationId, status: "not_requested" as const, assets: [] }
-      : await assetManager.capture(detail, conversation);
+      : await assetManager.capture(detail, conversation, parseJson<import("../core/types").ConversationAssetIndex>(
+        await this.options.filesystem.readText(`${conversationBasePath(conversation.conversationId)}/assets.json`)));
     linkNormalizedAssets(normalized, assets.assets);
     const normalizedText = prettyJson(normalized);
     const markdown = renderConversationMarkdown(normalized);
@@ -279,9 +285,11 @@ export class ChatGptCaptureEngine {
       || marker.schemaVersion !== 1
       || marker.provider !== "chatgpt-web"
       || marker.logicalKey !== conversation.logicalKey
+      || marker.conversationId !== conversation.conversationId
       || marker.workspaceFingerprint !== this.options.workspace.workspaceFingerprint
       || marker.normalizerVersion !== NORMALIZER_VERSION
       || (this.options.includeAssets !== false && marker.assetStatus !== "complete")
+      || !Array.isArray(marker.listingHashes)
       || !sameSet(marker.listingHashes, conversation.listingHashes)) return false;
     const files: Array<[string, string]> = [
       [`${base}/raw-complete.json`, marker.rawMarkerHash],
@@ -293,7 +301,24 @@ export class ChatGptCaptureEngine {
       const content = await this.options.filesystem.readText(path);
       if (content === undefined || await sha256Hex(content) !== hash) return false;
     }
-    return Boolean(await store.validRawMarker(conversation));
+    const rawMarker = await store.validRawMarker(conversation);
+    if (!rawMarker || marker.detailHash !== rawMarker.detailHash) return false;
+    try {
+      const detail = JSON.parse((await this.options.filesystem.readText(rawMarker.detailPath))!);
+      const evidence = validateConversationEvidence(detail, conversation.conversationId, rawMarker.retrievalSource);
+      const assets = parseJson<import("../core/types").ConversationAssetIndex>(await this.options.filesystem.readText(`${base}/assets.json`));
+      if (!assets || !Array.isArray(assets.assets) || assets.status !== marker.assetStatus) return false;
+      if ((await assetReferenceFindings(evidence.detail, assets, conversation.conversationId, this.options.includeAssets === false)).length) return false;
+      if (this.options.includeAssets !== false && !await verifyPhysicalAssetRecords(this.options.filesystem, assets.assets)) return false;
+      const normalized = parseJson<import("../core/types").NormalizedConversation>(await this.options.filesystem.readText(`${base}/conversation.json`));
+      if (!normalized) return false;
+      const rebuilt = normalizeConversation(evidence.detail, conversation, this.options.workspace.workspaceFingerprint);
+      linkNormalizedAssets(rebuilt, assets.assets);
+      if (normalized.coverage === undefined) delete rebuilt.coverage;
+      return prettyJson(rebuilt) === prettyJson(normalized);
+    } catch {
+      return false;
+    }
   }
 
   private async writeRunReport(result: CaptureRunResult): Promise<void> {
@@ -326,21 +351,23 @@ export class ChatGptCaptureEngine {
       const existing = parseJson<ProjectAssetCompletionMarker>(await this.options.filesystem.readText(`${base}/complete.json`));
       const existingAssets = await this.options.filesystem.readText(`${base}/assets.json`);
       const expectedStatus = this.options.includeAssets === false ? "not_requested" : "complete";
-      if (existing
+      const parsed = parseJson<ProjectAssetIndex>(existingAssets);
+      const validSource = existing
         && existing.schemaVersion === 1
         && existing.provider === "chatgpt-web"
         && existing.projectId === project.projectId
-        && existing.projectRawHash === project.rawHash
+        && existing.projectRawHash === project.rawHash;
+      if (validSource
         && existing.status === expectedStatus
         && existingAssets !== undefined
-        && await sha256Hex(existingAssets) === existing.assetsHash) {
-        const parsed = parseJson<ProjectAssetIndex>(existingAssets);
-        assetCount += parsed?.assets.length ?? 0;
+        && await sha256Hex(existingAssets) === existing.assetsHash
+        && parsed && await assetManager.validProjectCapture(project, parsed, expectedStatus)) {
+        assetCount += parsed.assets.length;
         continue;
       }
       const assets: ProjectAssetIndex = this.options.includeAssets === false
         ? { schemaVersion: 1, projectId: project.projectId, status: "not_requested", assets: [] }
-        : await assetManager.captureProject(project);
+        : await assetManager.captureProject(project, validSource && parsed ? parsed : undefined);
       const assetsText = prettyJson(assets);
       const marker: ProjectAssetCompletionMarker = {
         schemaVersion: 1,
@@ -374,6 +401,35 @@ export class ChatGptCaptureEngine {
   }
 }
 
+/** Do not silently abandon or overwrite old lossy-layout records.
+ * No live files are moved or deleted; exceptional legacy data needs explicit migration.
+ */
+async function assertSafeConversationPaths(filesystem: ArchiveFileSystem, conversations: InventoryConversation[]): Promise<void> {
+  const used = new Map<string, string>();
+  for (const conversation of conversations) {
+    const key = conversationBasePath(conversation.conversationId).toLowerCase();
+    const prior = used.get(key);
+    if (prior !== undefined && prior !== conversation.conversationId) {
+      throw new Error("Multiple conversation IDs resolve to one archive path.");
+    }
+    used.set(key, conversation.conversationId);
+  }
+  const legacyCandidates = conversations.filter(conversation =>
+    legacyConversationBasePath(conversation.conversationId) !== conversationBasePath(conversation.conversationId));
+  if (!legacyCandidates.length) return;
+  const existingFiles = await filesystem.listPaths("conversations");
+  for (const conversation of legacyCandidates) {
+    const legacy = legacyConversationBasePath(conversation.conversationId);
+    if (!existingFiles.some(path => path.startsWith(legacy + "/"))) continue;
+    const rawMarker = parseJson<{ conversationId?: string }>(await filesystem.readText(legacy + "/raw-complete.json"));
+    const completion = parseJson<{ conversationId?: string }>(await filesystem.readText(legacy + "/complete.json"));
+    const owner = rawMarker?.conversationId ?? completion?.conversationId;
+    if (typeof owner === "string" && owner !== conversation.conversationId
+      && legacyConversationBasePath(owner) === legacy) continue; // Old path belongs to a different ID; never touch it.
+    throw new Error("Legacy conversation directory requires explicit collision-safe migration before writing.");
+  }
+}
+
 function projectBasePath(projectId: string): string {
   if (!/^[A-Za-z0-9_-]{1,256}$/.test(projectId)) throw new Error("Project identifier is unsafe for archive paths.");
   return `projects/${projectId}`;
@@ -400,17 +456,4 @@ function safeFailure(error: unknown): SafeFailure {
 function sameSet(left: string[], right: string[]): boolean {
   const sortedRight = [...right].sort();
   return left.length === right.length && [...left].sort().every((value, index) => value === sortedRight[index]);
-}
-
-function linkNormalizedAssets(normalized: ReturnType<typeof normalizeConversation>, assets: Array<{ providerId: string | null; relativePath: string | null; status: string }>): void {
-  const unused = assets.filter((asset) => asset.relativePath && asset.status === "complete");
-  for (const message of normalized.messages) {
-    for (const part of message.parts) {
-      if (part.kind !== "asset" || !part.assetId) continue;
-      const providerId = part.assetId.replace(/^(?:sediment|file-service):\/\//, "");
-      let index = unused.findIndex((asset) => asset.providerId === providerId);
-      if (index < 0) index = unused.findIndex((asset) => asset.providerId === null);
-      if (index >= 0) part.assetPath = unused.splice(index, 1)[0]!.relativePath!;
-    }
-  }
 }

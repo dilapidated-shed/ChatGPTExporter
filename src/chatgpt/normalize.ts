@@ -1,6 +1,6 @@
 import { graphFindings } from "./capture";
 import type { ChatGptConversationDetail, ChatGptMessage, ChatGptMessageContent } from "./envelopes";
-import { toJsonValue } from "../core/serialization";
+import { prettyJson, toJsonValue } from "../core/serialization";
 import type {
   InventoryConversation,
   JsonObject,
@@ -12,7 +12,21 @@ import type {
   ValidationFinding,
 } from "../core/types";
 
-export const NORMALIZER_VERSION = "chatgpt-web-v1";
+// Canonical output v2 removes page-layout evidence while retaining it in raw source.
+export const NORMALIZER_VERSION = "chatgpt-web-v2";
+
+export function linkNormalizedAssets(normalized: NormalizedConversation, assets: Array<{ providerId: string | null; relativePath: string | null; status: string }>): void {
+  const unused = assets.filter((asset) => asset.relativePath && asset.status === "complete");
+  for (const message of normalized.messages) {
+    for (const part of message.parts) {
+      if (part.kind !== "asset" || !part.assetId) continue;
+      const providerId = part.assetId.replace(/^(?:sediment|file-service):\/\//, "");
+      let index = unused.findIndex((asset) => asset.providerId === providerId);
+      if (index < 0) index = unused.findIndex((asset) => asset.providerId === null);
+      if (index >= 0) part.assetPath = unused.splice(index, 1)[0]!.relativePath!;
+    }
+  }
+}
 
 export function normalizeConversation(
   raw: ChatGptConversationDetail,
@@ -80,6 +94,7 @@ export function normalizeConversation(
     nodes,
     messages,
     findings,
+    coverage: { messages: Object.hasOwn(raw, "__pagination_evidence") ? "current_branch" : "returned_provider_graph", providerGraph: "unknown", versions: "unknown" },
     extensions: { chatgpt: toJsonValue(conversationExtensions(raw)) },
   };
 }
@@ -196,8 +211,32 @@ function contentText(content: ChatGptMessageContent): string {
 }
 
 function conversationExtensions(raw: ChatGptConversationDetail): JsonObject {
-  const excluded = new Set(["mapping"]);
+  // Raw detail revisions keep the complete provider response and pagination
+  // receipts. The canonical semantic file must not depend on page boundaries.
+  const excluded = new Set(["mapping", "__pagination_evidence"]);
   return Object.fromEntries(Object.entries(raw).filter(([key]) => !excluded.has(key)).map(([key, value]) => [key, toJsonValue(value)]));
+}
+
+/**
+ * For independent read-only audit of v1 archives. Older canonical JSON copied
+ * pagination receipts into extensions.chatgpt. Only disregard those bytes if
+ * they exactly match independently replay-validated raw evidence.
+ *
+ * Resume itself upgrades old canonical output to v2 from immutable raw files.
+ */
+export function comparableLegacyNormalized(
+  stored: NormalizedConversation,
+  validatedRaw: ChatGptConversationDetail,
+): NormalizedConversation {
+  if (stored.normalizerVersion !== "chatgpt-web-v1") return stored;
+  const extensions = stored.extensions?.chatgpt;
+  if (!extensions || typeof extensions !== "object" || Array.isArray(extensions)) return stored;
+  const old = extensions as JsonObject;
+  const rawHasPages = Object.hasOwn(validatedRaw, "__pagination_evidence");
+  if (Object.hasOwn(old, "__pagination_evidence") !== rawHasPages) return stored;
+  if (rawHasPages && prettyJson(old.__pagination_evidence) !== prettyJson(validatedRaw.__pagination_evidence)) return stored;
+  const { __pagination_evidence: _paginationEvidence, ...semanticExtensions } = old;
+  return { ...stored, normalizerVersion: NORMALIZER_VERSION, extensions: { chatgpt: semanticExtensions } };
 }
 
 function optionalString(value: unknown): string | null {

@@ -20,8 +20,27 @@ export function assertSafeRelativePath(path: string): void {
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) throw new Error(`Unsafe relative path: ${path}`);
 }
 
-export function conversationBasePath(conversationId: string): string {
+const CONVERSATION_ID = /^[A-Za-z0-9_-]{1,256}$/;
+
+/** Historical loss-prone mapping, for conservative discovery only; never write new data here. */
+export function legacyConversationBasePath(conversationId: string): string {
   const path = `conversations/${safePathSegment(conversationId, "missing-id", 160)}`;
+  assertSafeRelativePath(path);
+  return path;
+}
+
+/** Case-insensitive injective mapping across all accepted ASCII conversation IDs.
+ * Existing ordinary lowercase ID directories retain their original paths.
+ * Exceptional IDs use reversible lowercase hex split into bounded components.
+ */
+export function conversationBasePath(conversationId: string): string {
+  if (!CONVERSATION_ID.test(conversationId)) throw new Error("Invalid conversation id for archive path.");
+  const legacyCompatible = /^[a-z0-9_-]{1,160}$/.test(conversationId)
+    && !conversationId.startsWith("-") && !conversationId.endsWith("-")
+    && !WINDOWS_RESERVED.test(conversationId);
+  const encoded = Array.from(conversationId, character => character.charCodeAt(0).toString(16).padStart(2, "0")).join("");
+  const path = legacyCompatible ? `conversations/${conversationId}`
+    : `conversations/.by-id-v2/${encoded.match(/.{1,96}/g)!.join("/")}`;
   assertSafeRelativePath(path);
   return path;
 }
