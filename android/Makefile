@@ -17,7 +17,7 @@ SOURCE_COMMIT ?= $(shell git rev-parse HEAD)
 NATIVE = $(CAPTURE_NATIVE) cgw_webview_android.c
 CAPTURE_NATIVE = ../native/cgw_web.c ../native/cgw_webview_bridge.c ../native/cgw_webview_capture.c ../native/cgw_capture.c ../native/cgw_json.c ../native/cgw_object_store.c ../native/cgw_sha256.c
 CAPTURE_HEADERS = ../native/cgw_web.h ../native/cgw_webview_bridge.h ../native/cgw_webview_capture.h ../native/cgw_capture.h ../native/cgw_json.h ../native/cgw_object_store.h ../native/cgw_sha256.h
-FLAGS = -std=c11 -D_GNU_SOURCE -O2 -Wall -Wextra -Werror -fPIC -shared -pthread -Wl,--no-undefined -Wl,-z,max-page-size=16384 -I../native -DCGW_CAPTURE_SOURCE_IDENTITY='"$(SOURCE_COMMIT)"'
+FLAGS = -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -pthread -Wl,--no-undefined -Wl,-z,max-page-size=16384 -I../native -DCGW_CAPTURE_SOURCE_IDENTITY='"$(SOURCE_COMMIT)"'
 
 .PHONY: dex
 dex:

@@ -1,4 +1,5 @@
 /* Android platform adapter. Native archive semantics live in ../native. */
+#define _GNU_SOURCE
 #include <jni.h>
 #include <android/log.h>
 #include <errno.h>
