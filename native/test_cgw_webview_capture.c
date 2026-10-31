@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 enum scenario { GOOD, EXPIRED, NAVIGATE, TRUNCATED, INCOMPLETE, FORGED, TOO_LARGE, INTERRUPTED };
@@ -128,7 +129,7 @@ static cgw_webview_result exchange(void *context, const cgw_webview_command *com
     }
     return reply(bridge, command, 404, "");
 }
-static cgw_capture_report run(const char *root, enum scenario which)
+static cgw_capture_report run_page_size(const char *root, enum scenario which, unsigned page_size)
 {
     cgw_webview_bridge_config cfg = { deterministic_fixture_entropy, NULL, 16384 };
     cgw_webview_bridge *bridge = cgw_webview_bridge_open(&cfg);
@@ -138,7 +139,7 @@ static cgw_capture_report run(const char *root, enum scenario which)
     fixture f = { which, 0 };
     cgw_webview_capture_transport transport = { bridge, "selected_fixture_workspace", exchange, &f };
     cgw_capture_bounds b = cgw_capture_default_bounds();
-    b.page_size = 2; b.max_conversations = 8; b.max_requests = 32;
+    b.page_size = page_size; b.max_conversations = 8; b.max_requests = 32;
     b.max_response_bytes = 16384; b.max_received_bytes = 131072;
     if (which == TOO_LARGE) b.max_response_bytes = 256;
     cgw_capture_report report = {0};
@@ -147,6 +148,15 @@ static cgw_capture_report run(const char *root, enum scenario which)
     check(f.calls == report.requests, "one page-port exchange per recorded request");
     cgw_webview_bridge_close(bridge);
     return report;
+}
+static cgw_capture_report run(const char *root, enum scenario which)
+{ return run_page_size(root, which, 2); }
+static int separate_verifier(const char *root)
+{
+    pid_t child = fork();
+    if (!child) { execl("./build/cgw-verify", "cgw-verify", root, (char *)NULL); _exit(127); }
+    int status = 0;
+    return child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 static int new_root(char buffer[128])
 {
@@ -230,6 +240,27 @@ int main(void)
     check(continued.result == CGW_CAPTURE_COMPLETE && continued.completed == 1
               && find_detail(interrupted_root),
           "restarted WebView capture repairs incomplete raw transport by re-fetching");
+    char cli_root[128], provenance[256]; check(new_root(cli_root), "separate executable validator fixture root");
+    cgw_capture_report candidate = run_page_size(cli_root, GOOD, 100);
+    check(candidate.result == CGW_CAPTURE_COMPLETE, "capture with Android page policy");
+    (void)snprintf(provenance, sizeof(provenance), "%s/workspace.txt", cli_root);
+    int provenance_fd = open(provenance, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    check(provenance_fd >= 0 && write(provenance_fd, "selected_fixture_workspace", 26) == 26,
+          "private workspace provenance retained for standalone reopening");
+    if (provenance_fd >= 0) close(provenance_fd);
+    check(separate_verifier(cli_root), "separate cgw-verify process reconstructs archive without credentials or page port");
+    DIR *markers = opendir(cli_root); struct dirent *entry; int removed = 0;
+    while (markers && (entry = readdir(markers))) if (!strncmp(entry->d_name, "complete-", 9)) {
+        char from[512], held[512];
+        (void)snprintf(from, sizeof(from), "%s/%s", cli_root, entry->d_name);
+        (void)snprintf(held, sizeof(held), "%s/held-marker", cli_root);
+        removed = rename(from, held) == 0;
+        check(removed && !separate_verifier(cli_root), "separate verifier rejects an omitted physical marker despite completion report");
+        if (removed) check(!rename(held, from), "restore synthetic marker after independent omission control");
+        break;
+    }
+    if (markers) closedir(markers);
+    check(removed, "omission control actually moved a completion marker");
     printf("webview_capture_assertions=%d failures=%d\n", assertions, failed);
     return failed ? 1 : 0;
 }

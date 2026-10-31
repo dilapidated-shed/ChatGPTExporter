@@ -52,5 +52,8 @@ cgw_store_result cgw_store_commit(cgw_store *store,
 void cgw_store_abort(cgw_store *store);
 
 const char *cgw_store_result_name(cgw_store_result result);
+/* Controlled operation label and numeric errno only; no paths or source data. */
+const char *cgw_store_failure_operation(const cgw_store *store);
+int cgw_store_failure_errno(const cgw_store *store);
 
 #endif

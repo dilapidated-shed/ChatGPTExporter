@@ -169,7 +169,11 @@ static int fetch(capture_state *s, const cgw_input *input, cgw_store_receipt *re
         (void)journal(s, "REQUEST\t%s\t%s\t%u\t%d\n", request_hash, capture_fetch_name(result), observation.http_status, observation.retryable);
         return reason(s, capture_fetch_name(result));
     }
-    if (cgw_store_commit(s->store, receipt) != CGW_STORE_OK) { cgw_store_abort(s->store); return reason(s, "object_commit_or_hash_failed"); }
+    if (cgw_store_commit(s->store, receipt) != CGW_STORE_OK) {
+        char failure[80];
+        (void)snprintf(failure, sizeof(failure), "object_commit_%s_errno_%d", cgw_store_failure_operation(s->store), cgw_store_failure_errno(s->store));
+        cgw_store_abort(s->store); return reason(s, failure);
+    }
     /* No extracted ID is trusted before these bytes and hash are durable. */
     return journal(s, "RAW\t%s\t%s\t%" PRIu64 "\n", request_hash, receipt->sha256, receipt->bytes);
 }

@@ -80,7 +80,7 @@ build/test_cgw_webview_capture: $(WEBVIEW_CAPTURE_SOURCES) $(WEBVIEW_CAPTURE_HEA
 	mkdir -p build
 	$(CC) $(CFLAGS) $(CURL_CFLAGS) -o $@ $(WEBVIEW_CAPTURE_SOURCES) $(CURL_LIBS) -lssl -lcrypto
 
-check-webview-capture: build/test_cgw_webview_capture
+check-webview-capture: build/test_cgw_webview_capture build/cgw-verify
 	./build/test_cgw_webview_capture
 
 .PHONY: check-sha256

@@ -23,7 +23,18 @@ struct cgw_store {
     uint64_t bytes;
     int active;
     int poisoned;
+    const char *failure_operation;
+    int failure_errno;
 };
+static cgw_store_result failed_operation(cgw_store *store, const char *operation)
+{
+    store->failure_operation = operation; store->failure_errno = errno;
+    return CGW_STORE_IO_ERROR;
+}
+const char *cgw_store_failure_operation(const cgw_store *store)
+{ return store && store->failure_operation ? store->failure_operation : "unknown"; }
+int cgw_store_failure_errno(const cgw_store *store)
+{ return store ? store->failure_errno : 0; }
 
 static int private_directory(int fd)
 {
@@ -105,6 +116,7 @@ void cgw_store_abort(cgw_store *store)
     store->stage_name[0] = '\0';
     store->active = 0;
     store->poisoned = 0;
+    store->failure_operation = NULL; store->failure_errno = 0;
     store->bytes = 0;
 }
 
@@ -214,8 +226,8 @@ cgw_store_result cgw_store_commit(cgw_store *store, cgw_store_receipt *receipt)
     if (store == NULL || !store->active || store->poisoned
         || receipt == NULL) return CGW_STORE_INVALID_STATE;
 
-    if (fchmod(store->stage_fd, 0400) != 0 || fsync(store->stage_fd) != 0)
-        return CGW_STORE_IO_ERROR;
+    if (fchmod(store->stage_fd, 0400) != 0) return failed_operation(store, "protect_stage");
+    if (fsync(store->stage_fd) != 0) return failed_operation(store, "sync_stage");
 
     unsigned char digest[32] = {0};
     if (!cgw_sha256_final(&store->sha, digest))
@@ -226,15 +238,15 @@ cgw_store_result cgw_store_commit(cgw_store *store, cgw_store_receipt *receipt)
     int already_present = 0;
     if (linkat(store->stage_dir_fd, store->stage_name,
                store->object_dir_fd, hash, 0) != 0) {
-        if (errno != EEXIST) return CGW_STORE_IO_ERROR;
+        if (errno != EEXIST) return failed_operation(store, "link_object");
         cgw_store_result existing =
             existing_object(store->object_dir_fd, hash, store->bytes);
         if (existing != CGW_STORE_OK) return existing;
         already_present = 1;
     }
-    if (fsync(store->object_dir_fd) != 0) return CGW_STORE_IO_ERROR;
-    if (unlinkat(store->stage_dir_fd, store->stage_name, 0) != 0
-        || fsync(store->stage_dir_fd) != 0) return CGW_STORE_IO_ERROR;
+    if (fsync(store->object_dir_fd) != 0) return failed_operation(store, "sync_objects");
+    if (unlinkat(store->stage_dir_fd, store->stage_name, 0) != 0) return failed_operation(store, "remove_stage");
+    if (fsync(store->stage_dir_fd) != 0) return failed_operation(store, "sync_staging");
 
     /* No archive-complete marker; only the immutable raw object is durable. */
     memcpy(receipt->sha256, hash, sizeof(hash));
