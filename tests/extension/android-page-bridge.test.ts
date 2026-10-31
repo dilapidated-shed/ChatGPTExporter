@@ -122,4 +122,51 @@ describe('Android page transport, synthetic host VM only', () => {
     await test.port.onmessage?.({ data: command });
     expect(test.messages).toEqual([`CGW1;ready;${bootstrap}`, `CGW1;reply;${nonce};1;502;0;1;`]);
   });
+  it('preserves the exact provider bytes of workspace-bound capture without exposing the page token', async () => {
+    const raw = ' { "offset":0, "limit":2, "total":0, "items":[], "newField": {"future":[1,"λ",null]} }\\n'.replace('\\n', '\n');
+    const archiveCommand =
+      `CGW1;request;${nonce};1;GET;/backend-api/conversations?offset=0&limit=2&order=updated;;selected_fixture_workspace`;
+    const test = setup({ responses: [
+      json({ accessToken: 'synthetic-page-only-access-token' }),
+      new Response(raw, { headers: { 'content-type': 'application/json' } }),
+    ] });
+    test.attach();
+    await test.port.onmessage?.({ data: archiveCommand });
+    const headers = test.requests[1]!.options.headers as Record<string, string>;
+    expect(headers['ChatGPT-Account-Id']).toBe('selected_fixture_workspace');
+    const encoded = test.messages[1]!.split(';')[7]!;
+    const utf8 = Uint8Array.from(atob(encoded.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+    expect(new TextDecoder().decode(utf8)).toBe(raw);
+    expect(test.messages.join('')).not.toContain('synthetic-page-only-access-token');
+  });
+
+  it('refuses raw archives with credentials or signed URLs rather than silently changing their bytes', async () => {
+    const archiveCommand =
+      `CGW1;request;${nonce};1;GET;/backend-api/conversation/conversation-1;;selected_fixture_workspace`;
+    for (const result of [
+      { id: 'conversation-1', future: { cookie: 'inadvertent-secret' } },
+      { id: 'conversation-1', asset: 'https://example.invalid/file?X-Amz-Signature=123' },
+      { id: 'conversation-1', text: 'synthetic-page-only-access-token' },
+    ]) {
+      const test = setup({ responses: [
+        json({ accessToken: 'synthetic-page-only-access-token' }),
+        json(result),
+      ] });
+      test.attach();
+      await test.port.onmessage?.({ data: archiveCommand });
+      expect(test.messages[1]).toBe(`CGW1;reply;${nonce};1;502;0;1;`);
+    }
+  });
+
+  it('rejects missing, malformed or write-capable workspace archive commands before a network call', async () => {
+    const request = `CGW1;request;${nonce};1;GET;/backend-api/conversations?offset=0&limit=2;;bad;workspace`;
+    for (const wire of [request, request.replace('bad;workspace', '../elsewhere'),
+       request.replace('bad;workspace', 'selected').replace('GET;', 'POST;')]) {
+      const test = setup();
+      test.attach();
+      await test.port.onmessage?.({ data: wire });
+      expect(test.requests).toEqual([]);
+    }
+  });
+
 });
