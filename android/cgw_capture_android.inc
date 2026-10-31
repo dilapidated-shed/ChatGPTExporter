@@ -17,6 +17,21 @@ static int account_sink(void *unused, const unsigned char *bytes, size_t length)
     if (length > sizeof(account_bytes) - account_used) return 0;
     memcpy(account_bytes + account_used, bytes, length); account_used += length; return 1;
 }
+static jstring utf8_label(JNIEnv *env, const char *value)
+{
+    size_t length = strlen(value);
+    jbyteArray bytes = (*env)->NewByteArray(env, (jsize)length);
+    if (!bytes) return NULL;
+    (*env)->SetByteArrayRegion(env, bytes, 0, (jsize)length, (const jbyte *)value);
+    jclass cls = (*env)->FindClass(env, "java/lang/String");
+    jmethodID init = cls ? (*env)->GetMethodID(env, cls, "<init>", "([BLjava/lang/String;)V") : NULL;
+    jstring encoding = (*env)->NewStringUTF(env, "UTF-8");
+    jstring result = init && encoding ? (jstring)(*env)->NewObject(env, cls, init, bytes, encoding) : NULL;
+    (*env)->DeleteLocalRef(env, bytes);
+    if (encoding) (*env)->DeleteLocalRef(env, encoding);
+    if (cls) (*env)->DeleteLocalRef(env, cls);
+    return result;
+}
 static int accept_accounts(JNIEnv *env)
 {
     cj_document d;
@@ -32,6 +47,13 @@ static int accept_accounts(JNIEnv *env)
         if (account_count >= 64 || !cj_text(&d, cj_member(&d, account, "account_id"), account_ids[account_count], 257)
             || !safe_workspace(account_ids[account_count])) { ok = 0; break; }
         for (unsigned old = 0; old < account_count; ++old) if (!strcmp(account_ids[old], account_ids[account_count])) ok = 0;
+        char name[257] = {0}, plan[129] = {0};
+        if (!cj_text(&d, cj_member(&d, account, "account_name"), name, sizeof(name)))
+            (void)cj_text(&d, cj_member(&d, account, "name"), name, sizeof(name));
+        if (!cj_text(&d, cj_member(&d, account, "account_plan"), plan, sizeof(plan)))
+            (void)cj_text(&d, cj_member(&d, account, "plan_type"), plan, sizeof(plan));
+        if (name[0]) (void)snprintf(account_labels[account_count], 512, "%s%s%s", name, plan[0] ? " - " : "", plan);
+        else (void)snprintf(account_labels[account_count], 512, "Workspace %u%s%s", account_count + 1, plan[0] ? " - " : "", plan);
         if (ok) ++account_count;
     }
     cj_free(&d); memset(account_bytes, 0, account_used); account_used = 0;
@@ -40,9 +62,8 @@ static int accept_accounts(JNIEnv *env)
     jobjectArray labels = strings ? (*env)->NewObjectArray(env, (jsize)account_count, strings, NULL) : NULL;
     if (!labels) return 0;
     for (unsigned i = 0; i < account_count; ++i) {
-        /* Workspace identifiers are already allowlisted ASCII. Show the actual
-         * selected identity instead of guessing a personal/default workspace. */
-        jstring label = (*env)->NewStringUTF(env, account_ids[i]);
+        jstring label = utf8_label(env, account_labels[i]);
+        if (!label) return 0;
         (*env)->SetObjectArrayElement(env, labels, (jsize)i, label);
         (*env)->DeleteLocalRef(env, label);
     }
@@ -171,6 +192,9 @@ static cgw_fetch_result archive_fetch(void *unused, const cgw_input *input, cgw_
     while (capture_paused && !capture_stopped) pthread_cond_wait(&platform_changed, &platform_mutex);
     if (capture_stopped) { memset(observation, 0, sizeof(*observation)); pthread_mutex_unlock(&platform_mutex); return CGW_FETCH_NETWORK_FAILURE; }
     cgw_webview_capture_transport transport = { bridge, selected_workspace, archive_exchange, NULL };
+#ifdef CGW_WEBVIEW_SYNTHETIC
+    if (atomic_load(&fixture) == 11 && input->operation == CGW_CONVERSATION_DETAIL) report("archive:interruptible_detail_request");
+#endif
     cgw_fetch_result result = cgw_webview_capture_fetch(&transport, input, options, sink_fn, sink_context, observation);
     (void)snprintf(worker_status, sizeof(worker_status), "Capturing main and archived history - last response %zu bytes", observation->received_bytes);
     (void)post_ui(); pthread_mutex_unlock(&platform_mutex); return result;
@@ -271,12 +295,21 @@ static void *archive_work(void *unused)
     (void)unused;
     JNIEnv *env = NULL;
     if ((*java_vm)->AttachCurrentThread(java_vm, (void *)&env, NULL) != JNI_OK) {
+        report("archive:worker_attach_failed");
         pthread_mutex_lock(&platform_mutex); capture_running = 0; pthread_mutex_unlock(&platform_mutex); return NULL;
     }
     worker_env = env; cgw_capture_report result;
+    report("archive:worker_attached");
     cgw_capture_result state = worker_action == 0
         ? cgw_capture_with_transport(archive_root, selected_workspace, archive_fetch, NULL, android_bounds(), &result)
         : cgw_capture_revalidate(archive_root, selected_workspace, android_bounds(), &result);
+#ifdef CGW_WEBVIEW_SYNTHETIC
+    if (state == CGW_CAPTURE_COMPLETE && worker_action == 0 && atomic_load(&fixture) >= 9) {
+        cgw_capture_report reopened;
+        state = cgw_capture_revalidate(archive_root, selected_workspace, android_bounds(), &reopened);
+        if (state == CGW_CAPTURE_COMPLETE) report("archive:disk_verified");
+    }
+#endif
     int copied = 0;
     if (state == CGW_CAPTURE_COMPLETE && worker_action == 1) {
         jclass contract = (*env)->FindClass(env, "android/provider/DocumentsContract");
@@ -298,7 +331,10 @@ static void *archive_work(void *unused)
         if (result.reused) report("archive:verified_restart_reuse");
         if (worker_action == 1) (void)snprintf(worker_status, sizeof(worker_status), "%s", copied ? "Archive copied; destination files reopened and byte-verified" : "Copy incomplete - destination may contain partial files; private archive retained");
         else (void)snprintf(worker_status, sizeof(worker_status), "%s %u main/archived conversations. Projects, shares and assets are not captured.", worker_action == 0 ? "Saved" : "Validated", result.completed);
-    } else (void)snprintf(worker_status, sizeof(worker_status), "Capture/validation incomplete (%s). Saved evidence retained; check session and resume.", capture_stopped ? "cancelled or navigated" : result.reason);
+    } else {
+        report("archive:incomplete"); report(capture_stopped ? "cancelled_or_navigated" : result.reason);
+        (void)snprintf(worker_status, sizeof(worker_status), "Capture/validation incomplete (%s). Saved evidence retained; check session and resume.", capture_stopped ? "cancelled or navigated" : result.reason);
+    }
     (void)post_ui(); pthread_mutex_unlock(&platform_mutex);
     worker_env = NULL; (*java_vm)->DetachCurrentThread(java_vm); return NULL;
 }
@@ -313,21 +349,22 @@ static void archive_ui_run(JNIEnv *env)
 }
 static void archive_start(JNIEnv *env, int action)
 {
+    report("archive:start_requested");
     if (capture_running) { show_status(env, "An archive operation is already running"); return; }
     if (worker_joinable) { pthread_join(archive_worker, NULL); worker_joinable = 0; }
     if (action == 0) {
-        if (!port_verified || !account_count || !current_document(env, webview)) { show_status(env, "Sign in, then Check session before capture"); return; }
+        if (!port_verified || !account_count || !current_document(env, webview)) { report("archive:session_not_ready"); show_status(env, "Sign in, then Check session before capture"); return; }
         jmethodID selected = method(env, workspace_view, "getSelectedItemPosition", "()I");
         jint index = selected ? (*env)->CallIntMethod(env, workspace_view, selected) : -1;
-        if (index < 0 || (unsigned)index >= account_count) { show_status(env, "Select an accessible workspace"); return; }
+        if (index < 0 || (unsigned)index >= account_count) { report("archive:workspace_not_selected"); show_status(env, "Select an accessible workspace"); return; }
         (void)snprintf(selected_workspace, sizeof(selected_workspace), "%s", account_ids[index]);
-        if (!select_root() || !remember_selection()) { show_status(env, "Private archive storage refused"); return; }
+        if (!select_root() || !remember_selection()) { report("archive:private_storage_refused"); show_status(env, "Private archive storage refused"); return; }
     }
     if (!selected_workspace[0] || !archive_root[0]) { show_status(env, "No saved archive is selected"); return; }
     capture_stopped = capture_paused = 0; capture_running = 1; worker_action = action;
     show_status(env, action == 0 ? "Capturing main and archived history..." : action == 1 ? "Validating before copy..." : "Validating saved disk evidence...");
     if (pthread_create(&archive_worker, NULL, archive_work, NULL)) { capture_running = 0; show_status(env, "Could not start archive worker"); }
-    else worker_joinable = 1;
+    else { worker_joinable = 1; report("archive:worker_started"); }
 }
 static void archive_choose_destination(JNIEnv *env)
 {

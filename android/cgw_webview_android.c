@@ -35,6 +35,7 @@ static int request_waiting, dispatch_pending, worker_action;
 static cgw_webview_result request_result;
 static cgw_webview_command pending_command;
 static char account_ids[64][257], selected_workspace[257], archive_root[PATH_MAX], selection_file[PATH_MAX];
+static char account_labels[64][512];
 static unsigned account_count;
 static unsigned char account_bytes[262144];
 static size_t account_used;
@@ -440,11 +441,16 @@ static jobject intercept(JNIEnv *env, jobject self, jobject view, jobject reques
             "new Promise(resolve=>setTimeout(()=>resolve(originalFetch(path,opts)),2000)):originalFetch(path,opts);"
             "addEventListener('message',e=>{if(e.ports.length===1)setTimeout(()=>"
             "e.ports[0].postMessage('CGW1;reply;00000000000000000000000000000000;999;200;0;1;eA'),300)});</script>";
+        if (mode == 11) body =
+            "<!doctype html><title>Synthetic interrupted capture</title><script>"
+            "const originalFetch=fetch;window.fetch=(path,opts)=>path.startsWith('/backend-api/conversation/')?"
+            "new Promise(resolve=>setTimeout(()=>resolve(originalFetch(path,opts)),10000)):originalFetch(path,opts);</script>";
     } else if (url && strcmp(url, "https://chatgpt.com/api/auth/session") == 0) {
         body = mode == 1 ? "{}" : "{\"accessToken\":\"e1-synthetic-token\"}";
     } else if (url && strstr(url, "https://chatgpt.com/backend-api/") == url) {
         body = "{\"accounts\":[],\"accessToken\":\"must-not-cross\"}";
-        if (mode == 0 || mode >= 9) body = "{\"accounts\":{\"synthetic\":{\"account\":{\"account_id\":\"synthetic_workspace\"}}}}";
+        if (mode == 0 || mode >= 9) body = "{\"accounts\":{\"synthetic\":{\"account\":{\"account_id\":\"synthetic_workspace\",\"account_name\":\"Synthetic λ workspace\",\"account_plan\":\"plus\"}}}}";
+        if (mode >= 11) body = "{\"accounts\":{\"synthetic\":{\"account\":{\"account_id\":\"synthetic_interrupted_workspace\",\"account_name\":\"Interrupted fixture\"}}}}";
         if (mode >= 9 && strstr(url, "/backend-api/conversations?")) {
             const char *offset = strstr(url, "offset=");
             int populated = offset && strtoull(offset + 7, NULL, 10) == 0 && !strstr(url, "is_archived=true");
