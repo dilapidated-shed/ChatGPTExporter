@@ -47,8 +47,8 @@ cgw_fetch_result cgw_webview_capture_fetch(
     bounded_sink buffer = { sink, sink_context, options.response_cap_bytes, 0, 0, 0 };
     if (buffer.limit > plan.response_limit_bytes) buffer.limit = plan.response_limit_bytes;
     cgw_webview_command command;
-    cgw_webview_result state = cgw_webview_bridge_begin(
-        t->bridge, input, accept_chunk, &buffer, &command);
+    cgw_webview_result state = cgw_webview_bridge_begin_workspace(
+        t->bridge, input, t->workspace_id, accept_chunk, &buffer, &command);
     if (state != CGW_WEBVIEW_OK) {
         return state == CGW_WEBVIEW_NOT_READY ? CGW_FETCH_AUTH_UNAVAILABLE
              : CGW_FETCH_INVALID_INPUT;
