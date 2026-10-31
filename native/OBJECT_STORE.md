@@ -46,9 +46,31 @@ No ChatGPT account or browser is contacted.
 
 Host success is **not** evidence of fsync guarantees on a particular Android
 flash device, F2FS/ext4 mount or SD card. Crash/power-loss tests, exact-source
-ICK builds and A1/C67 acceptance remain separate. The Chromium extension's
+ICK builds and physical TAB_P10 acceptance remain separate. A1/C67 are
+historical targets and are unavailable. The Chromium extension's
 existing archival validation remains authoritative until this native
 implementation grows a complete independently audited archive.
 
-Tracked under the same human-authorized Flexible Pipes envelope #147; draft
-and unmerged until registered dispatch and ai-ci acceptance exist.
+The original candidate used a Flexible Pipes work envelope. The completion
+integration executes directly; another orchestration registration is not a
+prerequisite. Independent source/runtime evidence is still required.
+
+## Android atomic publication
+
+The installed Android 14 capture at source
+`560f13798b242999199b20e3340f5150cecbadbf` refused its first object with
+`object_commit_link_object_errno_13`. The
+[Android 14 policy](https://android.googlesource.com/platform/system/sepolicy/+/refs/tags/android-security-14.0.0_r1/private/app_neverallows.te)
+forbids app hard links even within app-private storage.
+
+Android now publishes the fsynced private stage with
+`renameat2(RENAME_NOREPLACE)`. An existing destination is rehashed and reused
+only if its contents match; no path falls back to overwriting rename or copy.
+The object and staging directory entries are fsynced before a receipt is
+returned. An unsupported operation is an explicit failure. The existing
+non-Android link-based implementation remains qualified separately.
+
+`make -C native check-store-android` exercises this exact syscall branch on
+the Linux build host, including inode preservation, corrupted prior evidence,
+complete capture, actual process termination/restart and torn-journal recovery.
+Installed Android and physical tablet acceptance remain separate evidence.

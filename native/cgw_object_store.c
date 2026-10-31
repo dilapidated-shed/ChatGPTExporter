@@ -12,6 +12,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#if defined(__ANDROID__) || defined(CGW_TEST_RENAME_PUBLICATION)
+#include <sys/syscall.h>
+#endif
 
 struct cgw_store {
     int root_fd;
@@ -220,6 +223,30 @@ static cgw_store_result existing_object(int directory, const char *name,
     return result;
 }
 
+static int publish_object(cgw_store *store, const char *hash, int *moved)
+{
+#if defined(__ANDROID__) || defined(CGW_TEST_RENAME_PUBLICATION)
+    /* Ordinary Android apps cannot create hard links, including inside their
+     * own sandbox (AOSP app_neverallows.te). RENAME_NOREPLACE preserves the
+     * same atomic no-overwrite contract. Never fall back to plain rename. */
+#if defined(SYS_renameat2)
+    long result = syscall(SYS_renameat2, store->stage_dir_fd, store->stage_name,
+                          store->object_dir_fd, hash, 1u /* RENAME_NOREPLACE */);
+#elif defined(__NR_renameat2)
+    long result = syscall(__NR_renameat2, store->stage_dir_fd, store->stage_name,
+                          store->object_dir_fd, hash, 1u /* RENAME_NOREPLACE */);
+#else
+    errno = ENOSYS;
+    long result = -1;
+#endif
+    if (!result) *moved = 1;
+    return result == 0 ? 0 : -1;
+#else
+    (void)moved;
+    return linkat(store->stage_dir_fd, store->stage_name, store->object_dir_fd, hash, 0);
+#endif
+}
+
 cgw_store_result cgw_store_commit(cgw_store *store, cgw_store_receipt *receipt)
 {
     if (receipt != NULL) memset(receipt, 0, sizeof(*receipt));
@@ -235,17 +262,16 @@ cgw_store_result cgw_store_commit(cgw_store *store, cgw_store_receipt *receipt)
     char hash[65];
     cgw_sha256_hex(digest, hash);
 
-    int already_present = 0;
-    if (linkat(store->stage_dir_fd, store->stage_name,
-               store->object_dir_fd, hash, 0) != 0) {
-        if (errno != EEXIST) return failed_operation(store, "link_object");
+    int already_present = 0, stage_moved = 0;
+    if (publish_object(store, hash, &stage_moved) != 0) {
+        if (errno != EEXIST) return failed_operation(store, "publish_object");
         cgw_store_result existing =
             existing_object(store->object_dir_fd, hash, store->bytes);
         if (existing != CGW_STORE_OK) return existing;
         already_present = 1;
     }
     if (fsync(store->object_dir_fd) != 0) return failed_operation(store, "sync_objects");
-    if (unlinkat(store->stage_dir_fd, store->stage_name, 0) != 0) return failed_operation(store, "remove_stage");
+    if (!stage_moved && unlinkat(store->stage_dir_fd, store->stage_name, 0) != 0) return failed_operation(store, "remove_stage");
     if (fsync(store->stage_dir_fd) != 0) return failed_operation(store, "sync_staging");
 
     /* No archive-complete marker; only the immutable raw object is durable. */

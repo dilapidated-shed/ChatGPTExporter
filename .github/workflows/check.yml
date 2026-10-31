@@ -34,6 +34,8 @@ jobs:
         run: sudo apt-get install -y pkg-config libcurl4-openssl-dev libssl-dev openssl
       - name: Native private content-addressed storage
         run: make -C native check-store
+      - name: Android no-hardlink publication, host syscall controls
+        run: make -C native check-store-android
       - name: Native HTTPS read-only transport, synthetic TLS fixture
         run: make -C native check-https
       - name: Bounded capture and targeted mutants, host loopback evidence only

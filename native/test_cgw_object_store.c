@@ -52,6 +52,7 @@ int main(void)
     struct stat st;
     check(fstat(fd, &st) == 0 && (st.st_mode & 0777) == 0400,
           "object not group/world-readable");
+    ino_t original_inode = st.st_ino;
     close(fd);
 
     check(cgw_store_begin(store) == CGW_STORE_OK, "second stage");
@@ -61,6 +62,7 @@ int main(void)
     check(cgw_store_commit(store, &receipt) == CGW_STORE_OK,
           "identical immutable object deduplicated");
     check(receipt.already_present == 1, "duplicate validated rather than overwritten");
+    check(!stat(final, &st) && st.st_ino == original_inode, "duplicate does not replace the original inode");
 
     check(cgw_store_begin(store) == CGW_STORE_OK, "partial stage");
     check(cgw_store_write(store, (const unsigned char *)"partial", 7)
@@ -83,6 +85,10 @@ int main(void)
     check(cgw_store_commit(store, &receipt) == CGW_STORE_EXISTING_OBJECT_CORRUPT,
           "matching filename without matching contents rejected");
     check(receipt.bytes == 0, "corruption does not publish receipt");
+    fd = open(final, O_RDONLY | O_NOFOLLOW);
+    memset(bytes, 0, sizeof(bytes));
+    check(fd >= 0 && read(fd, bytes, 3) == 3 && !strcmp(bytes, "bad"), "refused publication preserves corrupt prior bytes for audit");
+    if (fd >= 0) close(fd);
     cgw_store_abort(store);
 
     cgw_store_close(store);
