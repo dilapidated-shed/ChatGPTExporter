@@ -15,6 +15,7 @@ typedef cgw_webview_result (*cgw_webview_capture_exchange_fn)(
 
 typedef struct {
     cgw_webview_bridge *bridge;
+    const char *workspace_id; /* stable selected workspace for this run */
     cgw_webview_capture_exchange_fn exchange;
     void *exchange_context;
 } cgw_webview_capture_transport;
