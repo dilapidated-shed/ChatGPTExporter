@@ -8,7 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-enum scenario { GOOD, EXPIRED, NAVIGATE, TRUNCATED, INCOMPLETE, FORGED, TOO_LARGE };
+enum scenario { GOOD, EXPIRED, NAVIGATE, TRUNCATED, INCOMPLETE, FORGED, TOO_LARGE, INTERRUPTED };
 typedef struct { enum scenario scenario; unsigned calls; } fixture;
 static int failed, assertions;
 
@@ -103,6 +103,17 @@ static cgw_webview_result exchange(void *context, const cgw_webview_command *com
         return reply(bridge, command, 200, body);
     }
     if (!strcmp(endpoint, "/backend-api/conversation/conversation-1")) {
+        if (f->scenario == INTERRUPTED) {
+            const char *fragment = "{\\"id\\":";
+            char encoded[64], wire[256];
+            (void)encode((const unsigned char *)fragment, strlen(fragment), encoded);
+            int n = snprintf(wire, sizeof(wire),
+                "CGW1;reply;%s;%" PRIu64 ";200;0;0;%s",
+                command->nonce, command->request_id, encoded);
+            if (cgw_webview_bridge_receive(bridge, wire, (size_t)n)
+                != CGW_WEBVIEW_OK) return CGW_WEBVIEW_INVALID_WIRE;
+            return cgw_webview_bridge_navigation_started(bridge);
+        }
         FILE *file = fopen("fixtures/capture/conversation-1.json", "rb");
         if (!file) return CGW_WEBVIEW_INVALID_ARGUMENT;
         size_t n = fread(body, 1, sizeof(body) - 1, file);
@@ -187,6 +198,15 @@ int main(void)
               "bad session/navigation/incomplete response cannot complete");
         check(bad.completed == 0, "no completion marker on failure");
     }
+    char interrupted_root[128];
+    check(new_root(interrupted_root), "interrupted stage root created");
+    cgw_capture_report partial = run(interrupted_root, INTERRUPTED);
+    check(partial.result != CGW_CAPTURE_COMPLETE && partial.completed == 0,
+          "partially received bytes cannot become a completion marker");
+    cgw_capture_report continued = run(interrupted_root, GOOD);
+    check(continued.result == CGW_CAPTURE_COMPLETE && continued.completed == 1
+              && find_detail(interrupted_root),
+          "restarted WebView capture repairs incomplete raw transport by re-fetching");
     printf("webview_capture_assertions=%d failures=%d\n", assertions, failed);
     return failed ? 1 : 0;
 }
