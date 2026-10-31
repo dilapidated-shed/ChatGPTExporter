@@ -88,6 +88,11 @@ void cgw_webview_bridge_close(cgw_webview_bridge *bridge);
 cgw_webview_result cgw_webview_bridge_navigation_started(
     cgw_webview_bridge *bridge);
 
+/* Cancel one in-flight command after a transport deadline or dispatch failure.
+ * Late messages become invalid; this does not create a new document/port. */
+cgw_webview_result cgw_webview_bridge_cancel_request(
+    cgw_webview_bridge *bridge);
+
 /* Mark one committed document.  The origin must be exactly
  * https://chatgpt.com and the platform must affirm a main frame. */
 cgw_webview_result cgw_webview_bridge_document_committed(
