@@ -26,6 +26,8 @@ jobs:
       - run: npm run check
       - name: Credential-free native web contract
         run: make -C native check
+      - name: Portable SHA-256 known-answer vectors
+        run: make -C native check-sha256
       - name: Native bounded WebView bridge contract
         run: make -C native check-webview
       - name: Host-only TLS fixture dependencies
