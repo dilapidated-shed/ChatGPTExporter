@@ -34,3 +34,6 @@ ChatGPTExport-*/
 .idea/
 .vscode/
 
+
+# Native synthetic fixture and host executables
+native/build/

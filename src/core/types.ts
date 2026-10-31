@@ -2,9 +2,17 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 
+/** A local verification result never proves a complete provider account. */
+export type ArchiveCompletionState =
+  | "complete_for_verified_scope"
+  | "conversations_complete_assets_partial"
+  | "incomplete_or_inconclusive"
+  | "offline_import_complete";
+
 export type ConversationScope = "main" | "archived" | "project" | "shared";
 export type ScopeTermination =
   | "declared_total_reached"
+  | "short_page"
   | "empty_page"
   | "cursor_exhausted"
   | "recognized_empty_account";
@@ -75,6 +83,8 @@ export interface InventoryChain {
   pageCount: number;
   itemCount: number;
   uniqueConversationCount: number;
+  /** Recomputed from raw offset pages by independent inventory evidence validation. */
+  offsetInstability?: boolean;
 }
 
 export interface ConversationInventory {
@@ -82,7 +92,14 @@ export interface ConversationInventory {
   provider: "chatgpt-web";
   workspaceFingerprint: string;
   generatedAt: string;
+  /** Normal traversal with no observed offset inconsistency; NOT account-wide completeness. */
   complete: boolean;
+  discovery?: {
+    traversalComplete: boolean;
+    providerSnapshot: "unverified";
+    offsetInstability: boolean;
+  };
+  evidenceModel?: "page_receipts_v1";
   chains: InventoryChain[];
   pages: InventoryPageRecord[];
   projects?: InventoryProject[];
@@ -192,6 +209,7 @@ export interface NormalizedConversation {
   nodes: NormalizedNode[];
   messages: NormalizedMessage[];
   findings: ValidationFinding[];
+  coverage?: import("../chatgpt/evidence").ConversationCoverage;
   extensions: { chatgpt: JsonValue };
 }
 

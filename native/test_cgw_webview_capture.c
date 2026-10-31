@@ -1,0 +1,285 @@
+#define _POSIX_C_SOURCE 200809L
+#include "cgw_webview_capture.h"
+#include <dirent.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+enum scenario { GOOD, EXPIRED, NAVIGATE, TRUNCATED, INCOMPLETE, FORGED, TOO_LARGE, INTERRUPTED };
+typedef struct { enum scenario scenario; unsigned calls; } fixture;
+static int failed, assertions;
+
+static void check(int value, const char *label)
+{
+    ++assertions;
+    if (!value) { ++failed; fprintf(stderr, "FAIL %s\n", label); }
+}
+static int deterministic_fixture_entropy(void *context, unsigned char *buffer, size_t size)
+{
+    (void)context;
+    for (size_t i = 0; i < size; ++i) buffer[i] = (unsigned char)(i + 7);
+    return 1; /* Only the offline synthetic host, never production entropy. */
+}
+static size_t encode(const unsigned char *source, size_t length, char *output)
+{
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    size_t n = 0;
+    for (size_t i = 0; i < length; i += 3) {
+        unsigned v = (unsigned)source[i] << 16;
+        if (i + 1 < length) v |= (unsigned)source[i + 1] << 8;
+        if (i + 2 < length) v |= (unsigned)source[i + 2];
+        output[n++] = alphabet[(v >> 18) & 63];
+        output[n++] = alphabet[(v >> 12) & 63];
+        if (i + 1 < length) output[n++] = alphabet[(v >> 6) & 63];
+        if (i + 2 < length) output[n++] = alphabet[v & 63];
+    }
+    output[n] = 0;
+    return n;
+}
+static cgw_webview_result reply(cgw_webview_bridge *bridge, const cgw_webview_command *command,
+                                unsigned status, const char *body)
+{
+    char wire[CGW_WEBVIEW_MESSAGE_CAPACITY];
+    if (status != 200) {
+        int n = snprintf(wire, sizeof(wire), "CGW1;reply;%s;%" PRIu64 ";%u;0;1;",
+                         command->nonce, command->request_id, status);
+        return cgw_webview_bridge_receive(bridge, wire, (size_t)n);
+    }
+    size_t length = strlen(body), position = 0;
+    uint64_t sequence = 0;
+    while (position < length) {
+        size_t size = length - position;
+        if (size > 2048) size = 2048;
+        char encoded[3000];
+        (void)encode((const unsigned char *)body + position, size, encoded);
+        int n = snprintf(wire, sizeof(wire), "CGW1;reply;%s;%" PRIu64 ";200;%" PRIu64 ";%d;%s",
+                         command->nonce, command->request_id, sequence,
+                         position + size == length, encoded);
+        cgw_webview_result r = cgw_webview_bridge_receive(bridge, wire, (size_t)n);
+        if (r != CGW_WEBVIEW_OK) return r;
+        position += size; ++sequence;
+    }
+    return CGW_WEBVIEW_OK;
+}
+static cgw_webview_result exchange(void *context, const cgw_webview_command *command,
+                                   cgw_webview_bridge *bridge, unsigned timeout_ms)
+{
+    fixture *f = context; ++f->calls;
+    if (timeout_ms < 1) return CGW_WEBVIEW_INVALID_ARGUMENT;
+    if (strstr(command->wire, "Bearer ") || strstr(command->wire, "Cookie:")) return CGW_WEBVIEW_REQUEST_REJECTED;
+    if (f->scenario == EXPIRED) return reply(bridge, command, 401, "");
+    if (f->scenario == NAVIGATE) return cgw_webview_bridge_navigation_started(bridge);
+    if (f->scenario == FORGED) {
+        char bad[256]; int n = snprintf(bad, sizeof(bad),
+            "CGW1;reply;00000000000000000000000000000000;%" PRIu64 ";200;0;1;e30",
+            command->request_id);
+        return cgw_webview_bridge_receive(bridge, bad, (size_t)n);
+    }
+    const char *path = command->wire;
+    for (unsigned i = 0; i < 5; ++i) {
+        path = strchr(path, ';'); if (!path) return CGW_WEBVIEW_INVALID_WIRE;
+        ++path;
+    }
+    char endpoint[8192] = {0};
+    const char *end = strchr(path, ';');
+    if (!end || (size_t)(end - path) >= sizeof(endpoint)) return CGW_WEBVIEW_INVALID_WIRE;
+    memcpy(endpoint, path, (size_t)(end - path));
+    char body[4096];
+    if (!strncmp(endpoint, "/backend-api/conversations?", 27)) {
+        uint64_t offset = UINT64_MAX;
+        unsigned limit = 0;
+        if (sscanf(endpoint, "/backend-api/conversations?offset=%" SCNu64 "&limit=%u", &offset, &limit) != 2)
+            return CGW_WEBVIEW_INVALID_WIRE;
+        int archived = strstr(endpoint, "is_archived=true") != NULL;
+        unsigned total = archived ? (f->scenario == INCOMPLETE ? 1u : 0u) : 1u;
+        if (f->scenario == TRUNCATED) return reply(bridge, command, 200, "{\"items\":[");
+        (void)snprintf(body, sizeof(body),
+            "{\"offset\":%" PRIu64 ",\"limit\":%u,\"total\":%u,\"items\":[%s]}",
+            offset, limit, total, !archived && offset == 0
+                ? "{\"id\":\"conversation-1\",\"title\":\"stable\"}" : "");
+        return reply(bridge, command, 200, body);
+    }
+    if (!strcmp(endpoint, "/backend-api/conversation/conversation-1")) {
+        if (f->scenario == INTERRUPTED) {
+            const char *fragment = "{";
+            char encoded[64], wire[256];
+            (void)encode((const unsigned char *)fragment, strlen(fragment), encoded);
+            int n = snprintf(wire, sizeof(wire),
+                "CGW1;reply;%s;%" PRIu64 ";200;0;0;%s",
+                command->nonce, command->request_id, encoded);
+            if (cgw_webview_bridge_receive(bridge, wire, (size_t)n)
+                != CGW_WEBVIEW_OK) return CGW_WEBVIEW_INVALID_WIRE;
+            return cgw_webview_bridge_navigation_started(bridge);
+        }
+        FILE *file = fopen("fixtures/capture/conversation-1.json", "rb");
+        if (!file) return CGW_WEBVIEW_INVALID_ARGUMENT;
+        size_t n = fread(body, 1, sizeof(body) - 1, file);
+        fclose(file); body[n] = 0;
+        if (f->scenario == TOO_LARGE) {
+            char larger[8192]; memset(larger, 'x', sizeof(larger) - 1);
+            larger[sizeof(larger) - 1] = 0;
+            return reply(bridge, command, 200, larger);
+        }
+        return reply(bridge, command, 200, body);
+    }
+    return reply(bridge, command, 404, "");
+}
+static cgw_capture_report run_page_size(const char *root, enum scenario which, unsigned page_size)
+{
+    cgw_webview_bridge_config cfg = { deterministic_fixture_entropy, NULL, 16384 };
+    cgw_webview_bridge *bridge = cgw_webview_bridge_open(&cfg);
+    check(bridge != NULL, "open isolated page bridge");
+    check(cgw_webview_bridge_document_committed(bridge, "https://chatgpt.com", 1) == CGW_WEBVIEW_OK, "verify main document");
+    check(cgw_webview_bridge_port_ready(bridge) == CGW_WEBVIEW_OK, "verify page port");
+    fixture f = { which, 0 };
+    cgw_webview_capture_transport transport = { bridge, "selected_fixture_workspace", exchange, &f };
+    cgw_capture_bounds b = cgw_capture_default_bounds();
+    b.page_size = page_size; b.max_conversations = 8; b.max_requests = 32;
+    b.max_response_bytes = 16384; b.max_received_bytes = 131072;
+    if (which == TOO_LARGE) b.max_response_bytes = 256;
+    cgw_capture_report report = {0};
+    (void)cgw_capture_with_transport(root, "selected_fixture_workspace",
+            cgw_webview_capture_fetch, &transport, b, &report);
+    check(f.calls == report.requests, "one page-port exchange per recorded request");
+    cgw_webview_bridge_close(bridge);
+    return report;
+}
+static cgw_capture_report run(const char *root, enum scenario which)
+{ return run_page_size(root, which, 2); }
+static int separate_verifier(const char *root)
+{
+    pid_t child = fork();
+    if (!child) { execl("./build/cgw-verify", "cgw-verify", root, (char *)NULL); _exit(127); }
+    int status = 0;
+    return child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+static int new_root(char buffer[128])
+{
+    (void)snprintf(buffer, 128, "build/webcapture-XXXXXX");
+    return mkdtemp(buffer) != NULL;
+}
+static int find_detail(const char *root)
+{
+    char directory[256]; (void)snprintf(directory, sizeof(directory), "%s/objects", root);
+    DIR *entries = opendir(directory);
+    if (!entries) return 0;
+    struct dirent *item; int found = 0;
+    while ((item = readdir(entries))) {
+        if (item->d_name[0] == '.') continue;
+        char path[512]; (void)snprintf(path, sizeof(path), "%s/%s", directory, item->d_name);
+        FILE *in = fopen(path, "rb"); if (!in) continue;
+        char bytes[4096] = {0}; size_t n = fread(bytes, 1, sizeof(bytes) - 1, in); fclose(in);
+        if (n && strstr(bytes, "\"future_unknown\"") && strstr(bytes, "\"assistant-alt\"")
+              && strstr(bytes, "\"future-role\"")) {
+            FILE *expected = fopen("fixtures/capture/conversation-1.json", "rb");
+            char oracle[4096] = {0};
+            size_t length = expected ? fread(oracle, 1, sizeof(oracle) - 1, expected) : 0;
+            if (expected) fclose(expected);
+            if (n == length && memcmp(bytes, oracle, n) == 0) ++found;
+        }
+        struct stat st; check(!stat(path, &st) && S_ISREG(st.st_mode) && !(st.st_mode & 077),
+                               "private raw immutable object");
+    }
+    closedir(entries); return found == 1;
+}
+int main(void)
+{
+    (void)umask(077);
+    char root[128];
+    check(new_root(root), "private root created");
+    cgw_capture_report good = run(root, GOOD);
+    check(good.result == CGW_CAPTURE_COMPLETE && good.expected == 1 && good.completed == 1,
+          "page-world transport completes main and archived validation");
+    check(good.requests == 7 && !good.full_account_export_complete,
+          "two exact inventory passes and bounded-only report");
+    check(find_detail(root), "raw provider bytes preserved with unknown fields and alternate branch");
+    cgw_capture_bounds verify_bounds = cgw_capture_default_bounds();
+    verify_bounds.page_size = 2; verify_bounds.max_conversations = 8; verify_bounds.max_requests = 32;
+    verify_bounds.max_response_bytes = 16384; verify_bounds.max_received_bytes = 131072;
+    cgw_capture_report disk;
+    check(cgw_capture_revalidate(root, "selected_fixture_workspace", verify_bounds, &disk) == CGW_CAPTURE_COMPLETE
+          && disk.completed == 1, "read-only disk validation replays raw inventory and graph without a page port");
+    cgw_capture_report resumed = run(root, GOOD);
+    check(resumed.result == CGW_CAPTURE_COMPLETE && resumed.reused == 1 && resumed.requests == 6,
+          "restart revalidates persisted immutable object and marker");
+    check(cgw_capture_revalidate(root, "selected_fixture_workspace", verify_bounds, &disk) == CGW_CAPTURE_COMPLETE,
+          "read-only validation also reconstructs a resumed run without new detail requests");
+    char journal_path[512];
+    (void)snprintf(journal_path, sizeof(journal_path), "%s/journal-%s.tsv", root, good.workspace_fingerprint);
+    int torn = open(journal_path, O_WRONLY | O_APPEND);
+    check(torn >= 0 && write(torn, "TORN_PARTIAL_RECORD", 19) == 19, "inject actual torn journal bytes");
+    if (torn >= 0) close(torn);
+    check(cgw_capture_revalidate(root, "selected_fixture_workspace", verify_bounds, &disk) != CGW_CAPTURE_COMPLETE,
+          "read-only verifier never repairs or trusts a torn journal");
+    cgw_capture_report repaired = run(root, GOOD);
+    check(repaired.result == CGW_CAPTURE_COMPLETE && repaired.reused == 1,
+          "capture preserves torn bytes before recovering a resumable journal prefix");
+    check(cgw_capture_revalidate(root, "selected_fixture_workspace", verify_bounds, &disk) == CGW_CAPTURE_COMPLETE,
+          "recovered archive independently reopens and validates");
+    enum scenario failures[] = { EXPIRED, NAVIGATE, TRUNCATED, INCOMPLETE, FORGED, TOO_LARGE };
+    for (size_t i = 0; i < sizeof(failures) / sizeof(failures[0]); ++i) {
+        char other[128]; check(new_root(other), "separate failed-capture root");
+        cgw_capture_report bad = run(other, failures[i]);
+        check(bad.result != CGW_CAPTURE_COMPLETE && !bad.full_account_export_complete,
+              "bad session/navigation/incomplete response cannot complete");
+        check(bad.completed == 0, "no completion marker on failure");
+    }
+    char interrupted_root[128];
+    check(new_root(interrupted_root), "interrupted stage root created");
+    cgw_capture_report partial = run(interrupted_root, INTERRUPTED);
+    check(partial.result != CGW_CAPTURE_COMPLETE && partial.completed == 0,
+          "partially received bytes cannot become a completion marker");
+    check(cgw_capture_revalidate(interrupted_root, "selected_fixture_workspace", verify_bounds, &disk) != CGW_CAPTURE_COMPLETE,
+          "read-only disk validation refuses interrupted capture without a detail marker");
+    cgw_capture_report continued = run(interrupted_root, GOOD);
+    check(continued.result == CGW_CAPTURE_COMPLETE && continued.completed == 1
+              && find_detail(interrupted_root),
+          "restarted WebView capture repairs incomplete raw transport by re-fetching");
+    char cli_root[128], provenance[256]; check(new_root(cli_root), "separate executable validator fixture root");
+    cgw_capture_report candidate = run_page_size(cli_root, GOOD, 100);
+    check(candidate.result == CGW_CAPTURE_COMPLETE, "capture with Android page policy");
+    (void)snprintf(provenance, sizeof(provenance), "%s/workspace.txt", cli_root);
+    int provenance_fd = open(provenance, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    check(provenance_fd >= 0 && write(provenance_fd, "selected_fixture_workspace", 26) == 26,
+          "private workspace provenance retained for standalone reopening");
+    if (provenance_fd >= 0) close(provenance_fd);
+    check(separate_verifier(cli_root), "separate cgw-verify process reconstructs archive without credentials or page port");
+    const char *view_kinds[] = { ".json", ".md", "native-index.json", "view-" };
+    for (unsigned kind = 0; kind < 4; ++kind) {
+        DIR *views = opendir(cli_root); struct dirent *view; int mutated = 0;
+        while (views && (view = readdir(views))) {
+            int selected = kind < 2 ? !strncmp(view->d_name, "conversation-", 13) && strstr(view->d_name, view_kinds[kind]) != NULL
+                         : kind == 2 ? !strcmp(view->d_name, view_kinds[kind]) : !strncmp(view->d_name, view_kinds[kind], 5);
+            if (!selected) continue;
+            char path[512]; (void)snprintf(path, sizeof(path), "%s/%s", cli_root, view->d_name);
+            int changed = open(path, O_WRONLY | O_TRUNC | O_NOFOLLOW);
+            mutated = changed >= 0 && write(changed, "false-completion\n", 17) == 17;
+            if (changed >= 0) close(changed);
+            break;
+        }
+        if (views) closedir(views);
+        check(mutated && !separate_verifier(cli_root), "independent process rejects modified JSON/Markdown/index/provenance despite valid raw markers");
+        cgw_capture_report fixed = run_page_size(cli_root, GOOD, 100);
+        check(fixed.result == CGW_CAPTURE_COMPLETE && fixed.reused == 1 && separate_verifier(cli_root),
+              "resume repairs derived views from preserved raw evidence without fetching the detail again");
+    }
+    DIR *markers = opendir(cli_root); struct dirent *entry; int removed = 0;
+    while (markers && (entry = readdir(markers))) if (!strncmp(entry->d_name, "complete-", 9)) {
+        char from[512], held[512];
+        (void)snprintf(from, sizeof(from), "%s/%s", cli_root, entry->d_name);
+        (void)snprintf(held, sizeof(held), "%s/held-marker", cli_root);
+        removed = rename(from, held) == 0;
+        check(removed && !separate_verifier(cli_root), "separate verifier rejects an omitted physical marker despite completion report");
+        if (removed) check(!rename(held, from), "restore synthetic marker after independent omission control");
+        break;
+    }
+    if (markers) closedir(markers);
+    check(removed, "omission control actually moved a completion marker");
+    printf("webview_capture_assertions=%d failures=%d\n", assertions, failed);
+    return failed ? 1 : 0;
+}

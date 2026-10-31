@@ -1,0 +1,28 @@
+name: browser-e2e
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-chromium-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Only synthetic HTTPS fixtures; never require ChatGPT/Drive credentials.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e

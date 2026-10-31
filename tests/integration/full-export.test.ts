@@ -31,7 +31,12 @@ describe("deterministic full-scope export integration", () => {
       now: () => new Date("2026-08-01T00:00:00.000Z"),
     }).run();
     expect(inventory).toMatchObject({ complete: true });
-    expect(inventory.pages.length).toBe(7);
+    expect(inventory.pages.length).toBe(9); // two extra empty-page probes: full archived and shared pages must not stop at total hints.
+    const offsetProbes = transport.request.mock.calls
+      .map(([operation]) => operation)
+      .filter((operation) => (operation.operation === "conversation_page" && operation.parameters.archived && operation.parameters.offset === 2)
+        || (operation.operation === "shared_page" && operation.parameters.offset === 2));
+    expect(offsetProbes).toHaveLength(2);
     expect(inventory.projects?.map((project) => [project.projectId, project.files.length])).toEqual([["project-1", 0], ["project-2", 1]]);
     expect(inventory.conversations).toHaveLength(6);
     expect(inventory.conversations.find((item) => item.conversationId === "conversation-1")?.memberships.map((item) => item.scope).sort())
@@ -134,7 +139,8 @@ function fullTransport(): ChatGptTransport & { request: ReturnType<typeof vi.fn>
         ? { items: [listing("conversation-1"), listing("project-only")], cursor: null }
         : { items: [], cursor: null };
     } else if (operation.operation === "shared_page") {
-      body = { items: [{ id: "share-owned", conversation_id: "conversation-1", title: "Owned" }, { id: "share-only", title: "Share only" }], total: 2 };
+      const shares = [{ id: "share-owned", conversation_id: "conversation-1", title: "Owned" }, { id: "share-only", title: "Share only" }];
+      body = { items: shares.slice(operation.parameters.offset, operation.parameters.offset + operation.parameters.limit), total: shares.length };
     } else if (operation.operation === "conversation_batch") {
       body = operation.parameters.conversationIds
         .filter((id) => id !== "conversation-2")

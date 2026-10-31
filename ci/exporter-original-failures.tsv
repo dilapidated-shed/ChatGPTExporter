@@ -1,0 +1,42 @@
+case_id	scope	full_name
+original-01	X3	X1 asset and archive identity isolation accepted long conversation ids cannot collide on archive path truncation
+original-02	X3	X1 asset and archive identity isolation accepted leading-hyphen conversation ids cannot collide after sanitizing
+original-03	X4	X1 inventory movement and terminal evidence does not certify a count hint while a full page can have unseen successors
+original-04	X4	X1 inventory movement and terminal evidence does not label a demonstrated moving offset listing as proven complete
+original-05	X2	X1 inventory movement and terminal evidence audit detects missing authoritative inventory pages
+original-06	X3	X1 pagination completeness rejects contradictory order even when overlapping message bytes agree
+original-07	X3	X1 fallback request order rejects conflicting conversation identity aliases
+original-08	X3	X1 fallback request order does not accept a batch record with contradictory identity aliases
+original-09	X6	X1 determinism and provider-field preservation canonical JSON invariant at width 4 overlap 0
+original-10	X6	X1 determinism and provider-field preservation canonical JSON invariant at width 1 overlap 0
+original-11	X6	X1 determinism and provider-field preservation canonical JSON invariant at width 3 overlap 1
+original-12	X6	X1 determinism and provider-field preservation canonical JSON invariant at width 2 overlap 2
+original-13	X6	X1 determinism and provider-field preservation graph validation visits parent edges linearly
+original-14	X2	X1 structural completeness independent of hashes resume rejects wrong response identity after recomputing hashes
+original-15	X2	X1 structural completeness independent of hashes resume rejects wrong request identity after recomputing hashes
+original-16	X2	X1 structural completeness independent of hashes resume rejects wrong operation after recomputing hashes
+original-17	X2	X1 structural completeness independent of hashes resume rejects missing provider messages after recomputing hashes
+original-18	X2	X1 structural completeness independent of hashes resume rejects mapping contradicts retained content after recomputing hashes
+original-19	X2	X1 structural completeness independent of hashes resume rejects source tag launders incomplete plural evidence after recomputing hashes
+original-20	X2	X1 structural completeness independent of hashes audit rejects remove first page after recomputing hashes
+original-21	X2	X1 structural completeness independent of hashes audit rejects remove middle page after recomputing hashes
+original-22	X2	X1 structural completeness independent of hashes audit rejects remove last page after recomputing hashes
+original-23	X2	X1 structural completeness independent of hashes audit rejects reorder pages after recomputing hashes
+original-24	X2	X1 structural completeness independent of hashes audit rejects duplicate page after recomputing hashes
+original-25	X2	X1 structural completeness independent of hashes audit rejects alter before after recomputing hashes
+original-26	X2	X1 structural completeness independent of hashes audit rejects alter start_cursor after recomputing hashes
+original-27	X2	X1 structural completeness independent of hashes audit rejects alter page_count after recomputing hashes
+original-28	X2	X1 structural completeness independent of hashes audit rejects append after terminal after recomputing hashes
+original-29	X2	X1 structural completeness independent of hashes audit rejects complete flag with unfinished tail after recomputing hashes
+original-30	X2	X1 structural completeness independent of hashes audit rejects current source without evidence after recomputing hashes
+original-31	X2	X1 structural completeness independent of hashes audit rejects wrong response identity after recomputing hashes
+original-32	X2	X1 structural completeness independent of hashes audit rejects wrong request identity after recomputing hashes
+original-33	X2	X1 structural completeness independent of hashes audit rejects wrong operation after recomputing hashes
+original-34	X2	X1 structural completeness independent of hashes audit rejects missing provider messages after recomputing hashes
+original-35	X2	X1 structural completeness independent of hashes audit rejects mapping contradicts retained content after recomputing hashes
+original-36	X2	X1 structural completeness independent of hashes audit rejects source tag launders incomplete plural evidence after recomputing hashes
+original-37	X2	X1 structural completeness independent of hashes current-branch archive must expose graph/version coverage
+original-38	X2	X1 interruption and historical compatibility legacy source label does not grandfather a disconnected graph
+original-39	X5	X1 historical assets and isolation resume repairs missing physical assets instead of trusting index hashes
+original-40	X2	X1 historical assets and isolation audit detects asset references removed from the index with refreshed hashes
+original-41	X3	X1 historical assets and isolation a fully captured earlier record survives a later failure in the same batch

@@ -1,0 +1,39 @@
+module ExporterShell
+
+import Backend.DEX.Encode
+import Backend.DEX.EncodeCallbackShell
+import System
+
+%default covering
+
+emit : String -> String -> String -> List NativeCallback -> IO ()
+emit filename name parent callbacks =
+  case encode_callback_shell ("Lorg/isomorphisms/webview/" ++ name ++ ";")
+                            parent "cgw_webview" callbacks of
+    Left error => do putStrLn error; exitFailure
+    Right bytes => do
+      result <- write_dex ("build/direct-dex/" ++ filename) bytes
+      case result of
+        Left error => do putStrLn error; exitFailure
+        Right () => putStrLn ("PASS direct DEX " ++ filename)
+
+main : IO ()
+main = do
+  emit "classes.dex" "BridgeActivity" "Landroid/app/Activity;"
+    [ MkNativeCallback "onCreate" "V" ["Landroid/os/Bundle;"]
+    , MkNativeCallback "onDestroy" "V" []
+    , MkNativeCallback "onBackPressed" "V" []
+    , MkNativeCallback "onCreateOptionsMenu" "Z" ["Landroid/view/Menu;"]
+    , MkNativeCallback "onOptionsItemSelected" "Z" ["Landroid/view/MenuItem;"]
+    , MkNativeCallback "onActivityResult" "V" ["I", "I", "Landroid/content/Intent;"] ]
+  emit "classes2.dex" "BridgeClient" "Landroid/webkit/WebViewClient;"
+    [ MkNativeCallback "onPageStarted" "V" ["Landroid/webkit/WebView;", "Ljava/lang/String;", "Landroid/graphics/Bitmap;"]
+    , MkNativeCallback "onPageCommitVisible" "V" ["Landroid/webkit/WebView;", "Ljava/lang/String;"]
+    , MkNativeCallback "onPageFinished" "V" ["Landroid/webkit/WebView;", "Ljava/lang/String;"]
+    , MkNativeCallback "shouldInterceptRequest" "Landroid/webkit/WebResourceResponse;" ["Landroid/webkit/WebView;", "Landroid/webkit/WebResourceRequest;"]
+    , MkNativeCallback "shouldOverrideUrlLoading" "Z" ["Landroid/webkit/WebView;", "Landroid/webkit/WebResourceRequest;"]
+    , MkNativeCallback "onReceivedSslError" "V" ["Landroid/webkit/WebView;", "Landroid/webkit/SslErrorHandler;", "Landroid/net/http/SslError;"] ]
+  emit "classes3.dex" "BridgeMessageCallback" "Landroid/webkit/WebMessagePort$WebMessageCallback;"
+    [ MkNativeCallback "onMessage" "V" ["Landroid/webkit/WebMessagePort;", "Landroid/webkit/WebMessage;"] ]
+  emit "classes4.dex" "BridgeUiTask" "Ljava/util/TimerTask;"
+    [ MkNativeCallback "run" "V" [] ]

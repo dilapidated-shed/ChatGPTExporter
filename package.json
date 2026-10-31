@@ -7,6 +7,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "npm run typecheck && npm test && npm run privacy:check && npm run build",
+    "import:offline": "node scripts/import-offline.mjs",
+    "verify:offline": "node scripts/verify-offline.mjs",
     "package": "node scripts/package.mjs",
     "privacy:check": "node scripts/privacy-check.mjs",
     "test": "vitest run",

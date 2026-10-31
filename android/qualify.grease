@@ -1,0 +1,151 @@
+#!/usr/bin/env grease
+# Synthetic emulator fixture only; never a phone installation procedure.
+var adb = $1
+var apk = $2
+var output = $3
+test -x "$adb"
+test -f "$apk"
+test ! -e "$output"
+mkdir -p "$output"
+"$adb" shell getprop ro.product.cpu.abi > "$output/abi.txt"
+"$adb" shell getprop ro.build.fingerprint > "$output/build-fingerprint.txt"
+grep -qx x86_64 "$output/abi.txt"
+"$adb" shell svc wifi disable
+"$adb" shell svc data disable
+"$adb" shell wm size 720x1600
+"$adb" shell wm density 160
+"$adb" install -r "$apk"
+var installed = "$("$adb" shell pm path org.isomorphisms.chatgptexporter.e1fixture | tr -d '\r' | sed 's/^package://')"
+test -n "$installed"
+"$adb" pull "$installed" "$output/installed.apk"
+cmp "$apk" "$output/installed.apk"
+for mode in 0 1 2 3 4 5 6 7 8 {
+    "$adb" shell am force-stop org.isomorphisms.chatgptexporter.e1fixture
+    "$adb" logcat -c
+    "$adb" shell am start -W -n org.isomorphisms.chatgptexporter.e1fixture/org.isomorphisms.webview.BridgeActivity --ei fixture "$mode"
+    if test "$mode" = 0 {
+        var ready = 'false'
+        for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+            "$adb" logcat -d -s CGW-E1:I > "$output/ready.log"
+            if grep -q port:ready "$output/ready.log" { setvar ready = 'true'; break }
+            sleep 1
+        }
+        test "$ready" = true
+        "$adb" shell uiautomator dump /sdcard/e1-controls.xml
+        "$adb" pull /sdcard/e1-controls.xml "$output/controls-before.xml"
+        grep -q 'text="CHECK SESSION"' "$output/controls-before.xml"
+        grep -q 'text="Ready - tap Check session"' "$output/controls-before.xml"
+        "$adb" shell input tap 650 52
+    }
+    var expected = 'probe:complete'
+    if test "$mode" = 1 || test "$mode" = 2 { setvar expected = 'probe:http:401' }
+    if test "$mode" = 3 || test "$mode" = 4 { setvar expected = 'probe:http:502' }
+    if test "$mode" = 5 { setvar expected = 'navigation:request_cancelled' }
+    if test "$mode" = 6 { setvar expected = 'navigation:external_or_federated_refused' }
+    if test "$mode" = 7 { setvar expected = 'message:oversize_rejected' }
+    if test "$mode" = 8 { setvar expected = 'replay_rejected' }
+    var passed = 'false'
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+        "$adb" logcat -d -s CGW-E1:I > "$output/mode-$mode.log"
+        if grep -q "$expected" "$output/mode-$mode.log" { setvar passed = 'true'; break }
+        sleep 1
+    }
+    if test "$passed" != true {
+        "$adb" logcat -d -s CGW-E1:V AndroidRuntime:E chromium:E > "$output/failure-$mode.log"
+        cat "$output/failure-$mode.log"
+        exit 1
+    }
+    grep -q port:ready "$output/mode-$mode.log"
+    if test "$mode" = 0 {
+        "$adb" shell uiautomator dump /sdcard/e1-result.xml
+        "$adb" pull /sdcard/e1-result.xml "$output/controls-after.xml"
+        grep -q 'text="Session verified - select a workspace, then Capture"' "$output/controls-after.xml"
+        grep -q 'Synthetic λ workspace - plus' "$output/controls-after.xml"
+        "$adb" shell screencap -p /sdcard/e1-controls.png
+        "$adb" pull /sdcard/e1-controls.png "$output/controls.png"
+    }
+    printf '\033[32mPASS\033[0m synthetic WebView mode %s\n' "$mode"
+}
+for mode in 9 10 {
+    "$adb" shell am force-stop org.isomorphisms.chatgptexporter.e1fixture
+    "$adb" logcat -c
+    "$adb" shell am start -W -n org.isomorphisms.chatgptexporter.e1fixture/org.isomorphisms.webview.BridgeActivity --ei fixture "$mode"
+    var archived = 'false'
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+        "$adb" logcat -d -s CGW-E1:I > "$output/archive-$mode.log"
+        if grep -q archive:bounded_complete "$output/archive-$mode.log" { setvar archived = 'true'; break }
+        sleep 1
+    }
+    if test "$archived" != true {
+        "$adb" logcat -d -s CGW-E1:V AndroidRuntime:E chromium:E > "$output/archive-failure-$mode.log"
+        "$adb" shell uiautomator dump /sdcard/archive-failure.xml
+        "$adb" pull /sdcard/archive-failure.xml "$output/archive-failure-$mode.xml"
+        cat "$output/archive-failure-$mode.log"
+        cat "$output/archive-failure-$mode.xml"
+        exit 1
+    }
+    grep -q archive:disk_verified "$output/archive-$mode.log"
+    if test "$mode" = 10 { grep -q archive:verified_restart_reuse "$output/archive-$mode.log" }
+    printf '\033[32mPASS\033[0m installed synthetic capture/restart %s\n' "$mode"
+}
+"$adb" shell am force-stop org.isomorphisms.chatgptexporter.e1fixture
+"$adb" logcat -c
+"$adb" shell am start -W -n org.isomorphisms.chatgptexporter.e1fixture/org.isomorphisms.webview.BridgeActivity --ei fixture 11
+var interrupted = 'false'
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+    "$adb" logcat -d -s CGW-E1:I > "$output/interrupted-before.log"
+    if grep -q archive:interruptible_detail_request "$output/interrupted-before.log" { setvar interrupted = 'true'; break }
+    sleep 1
+}
+test "$interrupted" = true
+"$adb" shell am force-stop org.isomorphisms.chatgptexporter.e1fixture
+"$adb" logcat -c
+"$adb" shell am start -W -n org.isomorphisms.chatgptexporter.e1fixture/org.isomorphisms.webview.BridgeActivity --ei fixture 12
+var recovered = 'false'
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+    "$adb" logcat -d -s CGW-E1:I > "$output/interrupted-after.log"
+    if grep -q archive:bounded_complete "$output/interrupted-after.log" { setvar recovered = 'true'; break }
+    sleep 1
+}
+test "$recovered" = true
+grep -q archive:disk_verified "$output/interrupted-after.log"
+printf '\033[32mPASS\033[0m installed interruption/restart and disk revalidation\n'
+
+# Drive the actual document-tree picker. Only synthetic emulator storage is
+# touched. Every tap is derived from an observed accessibility node's bounds.
+proc tap_attribute(attribute, label, tag) {
+    "$adb" shell uiautomator dump /sdcard/cgw-saf.xml
+    "$adb" pull /sdcard/cgw-saf.xml "$output/saf-$tag.xml"
+    sed 's/></>\n</g' "$output/saf-$tag.xml" | grep -F "$attribute=\"$label\"" | head -1 > "$output/saf-node.txt"
+    var left = "$(sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\].*/\1/p' "$output/saf-node.txt")"
+    var top = "$(sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\].*/\2/p' "$output/saf-node.txt")"
+    test -n "$left"
+    test -n "$top"
+    "$adb" shell input tap "$(expr "$left" + 8)" "$(expr "$top" + 8)"
+}
+"$adb" shell mkdir -p /sdcard/Documents/ChatGPTExporterAcceptance
+"$adb" shell input keyevent 82
+tap_attribute text 'Copy archive to folder' copy
+# The observed Android 14 tree picker starts at primary storage and exposes
+# Documents directly; its wide layout has no collapsed "Show roots" control.
+tap_attribute text Documents documents
+tap_attribute text ChatGPTExporterAcceptance destination
+tap_attribute text 'USE THIS FOLDER' use-folder
+tap_attribute text ALLOW allow
+var copied = 'false'
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+    "$adb" logcat -d -s CGW-E1:I > "$output/saf-copy.log"
+    if grep -q archive:destination_copied_and_reopened "$output/saf-copy.log" { setvar copied = 'true'; break }
+    sleep 1
+}
+test "$copied" = true
+"$adb" pull /sdcard/Documents/ChatGPTExporterAcceptance "$output/copied"
+var exported = "$(find "$output/copied" -name workspace.txt -print | head -1 | sed 's,/workspace.txt$,,')"
+test -n "$exported"
+chmod -R go-rwx "$exported"
+make -C native verifier
+native/build/cgw-verify "$exported" > "$output/saf-independent-verifier.txt"
+grep -q PASS_BOUNDED_MAIN_ARCHIVED "$output/saf-independent-verifier.txt"
+printf '\033[32mPASS\033[0m actual SAF picker, copy, destination byte revalidation, independent process reopening\n'
+"$adb" shell am force-stop org.isomorphisms.chatgptexporter.e1fixture
+sha256sum "$apk" "$output/installed.apk" > "$output/apk.sha256"
