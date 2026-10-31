@@ -126,15 +126,8 @@ proc tap_attribute(attribute, label, tag) {
 "$adb" shell mkdir -p /sdcard/Documents/ChatGPTExporterAcceptance
 "$adb" shell input keyevent 82
 tap_attribute text 'Copy archive to folder' copy
-tap_attribute content-desc 'Show roots' roots
-"$adb" shell uiautomator dump /sdcard/cgw-roots.xml
-"$adb" pull /sdcard/cgw-roots.xml "$output/saf-roots-open.xml"
-var model = "$("$adb" shell getprop ro.product.model | tr -d '\r')"
-if grep -q 'text="Internal storage"' "$output/saf-roots-open.xml" {
-    tap_attribute text 'Internal storage' internal
-} else {
-    tap_attribute text "$model" internal
-}
+# The observed Android 14 tree picker starts at primary storage and exposes
+# Documents directly; its wide layout has no collapsed "Show roots" control.
 tap_attribute text Documents documents
 tap_attribute text ChatGPTExporterAcceptance destination
 tap_attribute text 'USE THIS FOLDER' use-folder
