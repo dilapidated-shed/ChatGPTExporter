@@ -24,12 +24,12 @@ native-capture: build/lib/arm64-v8a/libcgw_capture.so build/fixture/lib/x86_64/l
 build/lib/arm64-v8a/libcgw_capture.so: $(CAPTURE_NATIVE) $(CAPTURE_HEADERS)
 	test -x "$(CC_ARM64)"
 	mkdir -p build/lib/arm64-v8a
-	"$(CC_ARM64)" $(FLAGS) $(CAPTURE_NATIVE) -o $@
+	"$(CC_ARM64)" $(FLAGS) -Wl,--no-undefined $(CAPTURE_NATIVE) -o $@
 
 build/fixture/lib/x86_64/libcgw_capture.so: $(CAPTURE_NATIVE) $(CAPTURE_HEADERS)
 	test -x "$(CC_X86_64)"
 	mkdir -p build/fixture/lib/x86_64
-	"$(CC_X86_64)" $(FLAGS) $(CAPTURE_NATIVE) -o $@
+	"$(CC_X86_64)" $(FLAGS) -Wl,--no-undefined $(CAPTURE_NATIVE) -o $@
 verify-grease:
 	printf '%s  %s\n' '7e31cd05b7a9d8fb2a4a9e003a7f3fcb0159138506d17f0fb28da8cbe22aa85c' '$(GREASE)' | sha256sum -c -
 	chmod +x "$(GREASE)"
