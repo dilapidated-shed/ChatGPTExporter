@@ -5,7 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
-#include <openssl/evp.h>
+#include "cgw_sha256.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,9 +37,9 @@ typedef struct {
 
 static int hash_bytes(const void *bytes, size_t count, char output[65])
 {
-    unsigned char hash[32]; unsigned n = 0;
-    if (!EVP_Digest(bytes, count, hash, &n, EVP_sha256(), NULL) || n != 32) return 0;
-    for (unsigned i = 0; i < n; ++i) (void)snprintf(output + 2 * i, 3, "%02x", hash[i]);
+    unsigned char digest[32];
+    if (!cgw_sha256_hash(bytes, count, digest)) return 0;
+    cgw_sha256_hex(digest, output);
     return 1;
 }
 static int identifier(const char *id)
@@ -162,10 +162,10 @@ static int read_object(capture_state *s, const char *hash)
 static int compare_ids(const void *a, const void *b) { return strcmp(((const observed_id *)a)->id, ((const observed_id *)b)->id); }
 static int inventory(capture_state *s, observed_id *ids, unsigned *count, char identity[65], int record)
 {
-    EVP_MD_CTX *hash = EVP_MD_CTX_new();
-    if (!hash || !EVP_DigestInit_ex(hash, EVP_sha256(), NULL)) { EVP_MD_CTX_free(hash); return 0; }
-    *count = 0; int ok = 1;
-    (void)EVP_DigestUpdate(hash, s->report->workspace_fingerprint, 64);
+    cgw_sha256 hash;
+    cgw_sha256_init(&hash);
+    *count = 0;
+    int ok = cgw_sha256_update(&hash, s->report->workspace_fingerprint, 64);
     for (unsigned scope = 0; scope < 2 && ok; ++scope) {
         uint64_t offset = 0, total = UINT64_MAX;
         for (;;) {
@@ -174,7 +174,7 @@ static int inventory(capture_state *s, observed_id *ids, unsigned *count, char i
             input.arguments.conversation_page.archived = (int)scope;
             cgw_store_receipt raw;
             if (!fetch(s, &input, &raw)) { ok = 0; break; }
-            (void)EVP_DigestUpdate(hash, raw.sha256, 64);
+            if (!cgw_sha256_update(&hash, raw.sha256, 64)) { ok = 0; break; }
             cj_document d;
             if (!cj_parse(&d, s->response, s->used, s->bounds.max_json_work)) { ok = reason(s, "malformed_page_json"); break; }
             size_t items = cj_member(&d, 0, "items");
@@ -217,10 +217,9 @@ static int inventory(capture_state *s, observed_id *ids, unsigned *count, char i
              * probe. Full-page and short-page totals receive the same check. */
         }
     }
-    unsigned char digest[32]; unsigned length = 0;
-    if (!ok || !EVP_DigestFinal_ex(hash, digest, &length) || length != 32) ok = 0;
-    else for (unsigned i = 0; i < 32; ++i) (void)snprintf(identity + 2 * i, 3, "%02x", digest[i]);
-    EVP_MD_CTX_free(hash);
+    unsigned char digest[32];
+    if (!ok || !cgw_sha256_final(&hash, digest)) ok = 0;
+    else cgw_sha256_hex(digest, identity);
     if (ok) qsort(ids, *count, sizeof(*ids), compare_ids);
     return ok;
 }
