@@ -34,6 +34,28 @@ typedef struct {
     char journal_name[96], marker_name[160];
 } capture_state;
 
+/* No platform networking dependency in the transport-neutral coordinator.
+ * This bounded result string is for reports only, never a credential. */
+static const char *capture_fetch_name(cgw_fetch_result result)
+{
+    switch (result) {
+    case CGW_FETCH_OK: return "ok";
+    case CGW_FETCH_INVALID_INPUT: return "invalid_input";
+    case CGW_FETCH_AUTH_UNAVAILABLE: return "auth_unavailable";
+    case CGW_FETCH_TOKEN_INVALID: return "token_invalid";
+    case CGW_FETCH_NETWORK_FAILURE: return "network_failure";
+    case CGW_FETCH_TLS_FAILURE: return "tls_failure";
+    case CGW_FETCH_HTTP_FAILURE: return "http_failure";
+    case CGW_FETCH_AUTH_REQUIRED: return "auth_required";
+    case CGW_FETCH_WORKSPACE_FORBIDDEN: return "workspace_forbidden";
+    case CGW_FETCH_RATE_LIMITED: return "rate_limited";
+    case CGW_FETCH_RESPONSE_TOO_LARGE: return "response_too_large";
+    case CGW_FETCH_SINK_REJECTED: return "sink_rejected";
+    case CGW_FETCH_SECRET_ECHO: return "secret_echo";
+    }
+    return "unknown_result";
+}
+
 static int hash_bytes(const void *bytes, size_t count, char output[65])
 {
     unsigned char digest[32];
@@ -130,8 +152,8 @@ static int fetch(capture_state *s, const cgw_input *input, cgw_store_receipt *re
     s->report->received_chunks += observation.received_chunks;
     if (result != CGW_FETCH_OK) {
         cgw_store_abort(s->store);
-        (void)journal(s, "REQUEST\t%s\t%s\t%u\t%d\n", request_hash, cgw_fetch_result_name(result), observation.http_status, observation.retryable);
-        return reason(s, cgw_fetch_result_name(result));
+        (void)journal(s, "REQUEST\t%s\t%s\t%u\t%d\n", request_hash, capture_fetch_name(result), observation.http_status, observation.retryable);
+        return reason(s, capture_fetch_name(result));
     }
     if (cgw_store_commit(s->store, receipt) != CGW_STORE_OK) { cgw_store_abort(s->store); return reason(s, "object_commit_or_hash_failed"); }
     /* No extracted ID is trusted before these bytes and hash are durable. */
