@@ -124,7 +124,7 @@ static cgw_capture_report run(const char *root, enum scenario which)
     check(cgw_webview_bridge_document_committed(bridge, "https://chatgpt.com", 1) == CGW_WEBVIEW_OK, "verify main document");
     check(cgw_webview_bridge_port_ready(bridge) == CGW_WEBVIEW_OK, "verify page port");
     fixture f = { which, 0 };
-    cgw_webview_capture_transport transport = { bridge, exchange, &f };
+    cgw_webview_capture_transport transport = { bridge, "selected_fixture_workspace", exchange, &f };
     cgw_capture_bounds b = cgw_capture_default_bounds();
     b.page_size = 2; b.max_conversations = 8; b.max_requests = 32;
     b.max_response_bytes = 16384; b.max_received_bytes = 131072;
