@@ -70,3 +70,15 @@ production: build/production/cgw_web.o build/production/cgw_https.o build/produc
 build/production/%.o: %.c $(CAPTURE_HEADERS)
 	mkdir -p build/production
 	$(CC) $(CFLAGS) $(CURL_CFLAGS) -c $< -o $@
+
+# Credential-free WebView transport through the *same* durable coordinator.
+# This test deliberately models the page-port exchange; no ChatGPT account.
+WEBVIEW_CAPTURE_SOURCES = cgw_web.c cgw_https.c cgw_object_store.c cgw_json.c cgw_capture.c cgw_webview_bridge.c cgw_webview_capture.c test_cgw_webview_capture.c
+WEBVIEW_CAPTURE_HEADERS = $(CAPTURE_HEADERS) cgw_webview_bridge.h cgw_webview_capture.h
+.PHONY: check-webview-capture
+build/test_cgw_webview_capture: $(WEBVIEW_CAPTURE_SOURCES) $(WEBVIEW_CAPTURE_HEADERS)
+	mkdir -p build
+	$(CC) $(CFLAGS) $(CURL_CFLAGS) -o $@ $(WEBVIEW_CAPTURE_SOURCES) $(CURL_LIBS) -lssl -lcrypto
+
+check-webview-capture: build/test_cgw_webview_capture
+	./build/test_cgw_webview_capture
