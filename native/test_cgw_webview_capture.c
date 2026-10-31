@@ -104,7 +104,7 @@ static cgw_webview_result exchange(void *context, const cgw_webview_command *com
     }
     if (!strcmp(endpoint, "/backend-api/conversation/conversation-1")) {
         if (f->scenario == INTERRUPTED) {
-            const char *fragment = "{\\"id\\":";
+            const char *fragment = "{";
             char encoded[64], wire[256];
             (void)encode((const unsigned char *)fragment, strlen(fragment), encoded);
             int n = snprintf(wire, sizeof(wire),
