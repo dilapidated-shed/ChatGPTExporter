@@ -41,7 +41,7 @@ check-store: build/test_cgw_object_store
 
 # Host/loopback fixtures only. Production qualification must explicitly select
 # the pinned ICK producer and shared ai-ci toolchain contract in hosted CI.
-CAPTURE_SOURCES = cgw_web.c cgw_https.c cgw_object_store.c cgw_sha256.c cgw_json.c cgw_capture.c test_cgw_capture.c
+CAPTURE_SOURCES = cgw_web.c cgw_https.c cgw_object_store.c cgw_sha256.c cgw_json.c cgw_capture.c cgw_capture_https.c test_cgw_capture.c
 CAPTURE_HEADERS = cgw_web.h cgw_https.h cgw_object_store.h cgw_sha256.h cgw_json.h cgw_capture.h
 .PHONY: check-capture check-capture-mutants
 build/test_cgw_capture: $(CAPTURE_SOURCES) $(CAPTURE_HEADERS)
@@ -73,7 +73,7 @@ build/production/%.o: %.c $(CAPTURE_HEADERS)
 
 # Credential-free WebView transport through the *same* durable coordinator.
 # This test deliberately models the page-port exchange; no ChatGPT account.
-WEBVIEW_CAPTURE_SOURCES = cgw_web.c cgw_https.c cgw_object_store.c cgw_sha256.c cgw_json.c cgw_capture.c cgw_webview_bridge.c cgw_webview_capture.c test_cgw_webview_capture.c
+WEBVIEW_CAPTURE_SOURCES = cgw_web.c cgw_https.c cgw_object_store.c cgw_sha256.c cgw_json.c cgw_capture.c cgw_capture_https.c cgw_webview_bridge.c cgw_webview_capture.c test_cgw_webview_capture.c
 WEBVIEW_CAPTURE_HEADERS = $(CAPTURE_HEADERS) cgw_webview_bridge.h cgw_webview_capture.h
 .PHONY: check-webview-capture
 build/test_cgw_webview_capture: $(WEBVIEW_CAPTURE_SOURCES) $(WEBVIEW_CAPTURE_HEADERS)
