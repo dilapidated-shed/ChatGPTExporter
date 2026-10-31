@@ -23,7 +23,6 @@ typedef struct { char id[257], parent[257], message_id[257]; size_t token; int p
 typedef struct {
     int root, journal, lock;
     cgw_store *store;
-    cgw_fetcher *fetcher;
     cgw_capture_transport_fn transport;
     void *transport_context;
     cgw_capture_bounds bounds;
@@ -125,9 +124,8 @@ static int fetch(capture_state *s, const cgw_input *input, cgw_store_receipt *re
     cgw_fetch_observation observation;
     cgw_fetch_options options = { cap, 30000 };
     memset(&observation, 0, sizeof(observation));
-    cgw_fetch_result result = s->transport
-        ? s->transport(s->transport_context, input, options, sink, s, &observation)
-        : cgw_fetcher_execute(s->fetcher, input, options, sink, s, &observation);
+    cgw_fetch_result result = s->transport(s->transport_context, input, options,
+                                            sink, s, &observation);
     s->report->received_bytes += observation.received_bytes;
     s->report->received_chunks += observation.received_chunks;
     if (result != CGW_FETCH_OK) {
@@ -377,14 +375,13 @@ cgw_capture_bounds cgw_capture_default_bounds(void)
     cgw_capture_bounds b = { 32, 256, 128, 1024, 1048576, 4000000, 33554432 }; return b;
 }
 static cgw_capture_result cgw_capture_core(const char *root, const char *workspace,
-                              cgw_token_fn authorize, void *authorization_context,
                               cgw_capture_transport_fn transport, void *transport_context,
                               cgw_capture_bounds bounds, cgw_capture_report *report)
 {
     if (!report) return CGW_CAPTURE_REFUSED;
     memset(report, 0, sizeof(*report)); report->result = CGW_CAPTURE_REFUSED;
     capture_state s = {0}; s.root = s.journal = s.lock = -1; s.bounds = bounds; s.report = report; s.transport = transport; s.transport_context = transport_context;
-    if (!root || !workspace || !identifier(workspace) || (!authorize && !transport) || !bounds.page_size || bounds.page_size > 100
+    if (!root || !workspace || !identifier(workspace) || !transport || !bounds.page_size || bounds.page_size > 100
         || !bounds.max_conversations || bounds.max_conversations > CAPTURE_MAX_IDS || !bounds.max_requests || bounds.max_requests > CAPTURE_MAX_REQUESTS
         || !bounds.max_graph_nodes || bounds.max_graph_nodes > CAPTURE_MAX_NODES || !bounds.max_response_bytes || bounds.max_response_bytes > 4194304
         || !bounds.max_json_work || bounds.max_json_work > 16000000 || !bounds.max_received_bytes) { (void)reason(&s, "invalid_capture_configuration"); return report->result; }
@@ -399,10 +396,9 @@ static cgw_capture_result cgw_capture_core(const char *root, const char *workspa
     s.journal = openat(s.root, s.journal_name, O_RDWR | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (!private_file(s.journal) || !validate_journal(&s)) goto done;
     s.store = cgw_store_open(root);
-    s.fetcher = transport ? NULL : cgw_fetcher_open(authorize, authorization_context, workspace);
     s.response = malloc(bounds.max_response_bytes); s.ids = calloc(bounds.max_conversations, sizeof(*s.ids));
     observed_id *again = calloc(bounds.max_conversations, sizeof(*again));
-    if (!s.store || (!transport && !s.fetcher) || !s.response || !s.ids || !again) { free(again); (void)reason(&s, "capture_resources_unavailable"); goto done; }
+    if (!s.store || !s.response || !s.ids || !again) { free(again); (void)reason(&s, "capture_resources_unavailable"); goto done; }
     report->result = CGW_CAPTURE_INCONCLUSIVE;
     unsigned second_count = 0; char second_identity[65] = {0};
     int ok = journal(&s, "BEGIN\t%s\n", CGW_CAPTURE_SOURCE_IDENTITY)
@@ -449,22 +445,11 @@ static cgw_capture_result cgw_capture_core(const char *root, const char *workspa
     if (!finish_report(&s, ok)) ok = 0;
     if (ok) report->result = CGW_CAPTURE_COMPLETE;
 done:
-    cgw_fetcher_close(s.fetcher); cgw_store_close(s.store); free(s.response); free(s.ids);
+    cgw_store_close(s.store); free(s.response); free(s.ids);
     if (s.journal >= 0) close(s.journal);
     if (s.lock >= 0) close(s.lock);
     if (s.root >= 0) close(s.root);
     return report->result;
-}
-
-/* The HTTPS entrypoint is retained unchanged for its established host
- * qualification. Android must use the transport entrypoint instead: no
- * bearer token leaves the WebView page. */
-cgw_capture_result cgw_capture(const char *root, const char *workspace,
-                              cgw_token_fn authorize, void *authorization_context,
-                              cgw_capture_bounds bounds, cgw_capture_report *report)
-{
-    return cgw_capture_core(root, workspace, authorize, authorization_context,
-                            NULL, NULL, bounds, report);
 }
 
 cgw_capture_result cgw_capture_with_transport(const char *root, const char *workspace,
@@ -473,6 +458,6 @@ cgw_capture_result cgw_capture_with_transport(const char *root, const char *work
                                               cgw_capture_bounds bounds,
                                               cgw_capture_report *report)
 {
-    return cgw_capture_core(root, workspace, NULL, NULL,
-                            transport, transport_context, bounds, report);
+    return cgw_capture_core(root, workspace, transport, transport_context,
+                            bounds, report);
 }
