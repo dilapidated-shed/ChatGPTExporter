@@ -11,6 +11,7 @@ import { assetReferenceFindings } from "./assets";
 import { normalizeConversation, linkNormalizedAssets, comparableLegacyNormalized } from "./normalize";
 import type {
   ArchiveManifest,
+  ArchiveCompletionState,
   AssetRecord,
   ConversationAssetIndex,
   ConversationInventory,
@@ -28,6 +29,10 @@ export interface ArchiveAuditFinding {
 
 export interface ArchiveAuditReport {
   schemaVersion: 1;
+  archiveContractVersion: 1;
+  completionState: ArchiveCompletionState;
+  fullAccountCaptureComplete: false;
+  atomicProviderSnapshotProven: false;
   provider: "chatgpt-web";
   workspaceFingerprint: string;
   auditedAt: string;
@@ -261,6 +266,11 @@ export async function auditArchive(options: {
       : "complete" as const;
   const report: ArchiveAuditReport = {
     schemaVersion: 1,
+    archiveContractVersion: 1,
+    completionState: terminalState === "complete" ? "complete_for_verified_scope"
+      : terminalState === "incomplete" ? "incomplete_or_inconclusive" : "conversations_complete_assets_partial",
+    fullAccountCaptureComplete: false,
+    atomicProviderSnapshotProven: false,
     provider: "chatgpt-web",
     workspaceFingerprint: inventory.workspaceFingerprint,
     auditedAt: (options.now ?? (() => new Date()))().toISOString(),

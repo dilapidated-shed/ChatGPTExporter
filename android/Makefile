@@ -15,8 +15,8 @@ IDRIC ?=
 IDRIC_RUNTIME_LIBRARY ?= $(dir $(IDRIC))idris2_app/libidris2_support.so
 SOURCE_COMMIT ?= $(shell git rev-parse HEAD)
 NATIVE = $(CAPTURE_NATIVE) cgw_webview_android.c
-CAPTURE_NATIVE = ../native/cgw_web.c ../native/cgw_webview_bridge.c ../native/cgw_webview_capture.c ../native/cgw_capture.c ../native/cgw_json.c ../native/cgw_object_store.c ../native/cgw_sha256.c
-CAPTURE_HEADERS = ../native/cgw_web.h ../native/cgw_webview_bridge.h ../native/cgw_webview_capture.h ../native/cgw_capture.h ../native/cgw_json.h ../native/cgw_object_store.h ../native/cgw_sha256.h
+CAPTURE_NATIVE = ../native/cgw_web.c ../native/cgw_webview_bridge.c ../native/cgw_webview_capture.c ../native/cgw_capture.c ../native/cgw_json.c ../native/cgw_views.c ../native/cgw_object_store.c ../native/cgw_sha256.c
+CAPTURE_HEADERS = ../native/cgw_web.h ../native/cgw_webview_bridge.h ../native/cgw_webview_capture.h ../native/cgw_capture.h ../native/cgw_json.h ../native/cgw_views.h ../native/cgw_object_store.h ../native/cgw_sha256.h
 FLAGS = -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -pthread -Wl,--no-undefined -Wl,-z,max-page-size=16384 -I../native -DCGW_CAPTURE_SOURCE_IDENTITY='"$(SOURCE_COMMIT)"'
 
 .PHONY: dex
@@ -82,17 +82,25 @@ build/arm64-unsigned.apk: build/lib/arm64-v8a/libcgw_webview.so AndroidManifest.
 	test -f "$(DEX_DIR)/classes2.dex"
 	test -f "$(DEX_DIR)/classes3.dex"
 	test -f "$(DEX_DIR)/classes4.dex"
-	"$(BUILD_TOOLS)/aapt2" link -I "$(ANDROID_JAR)" --manifest AndroidManifest.xml --version-code 3 --version-name 0.2-capture-candidate -o build/manifest.apk
+	"$(BUILD_TOOLS)/aapt2" link -I "$(ANDROID_JAR)" --manifest AndroidManifest.xml --version-code 4 --version-name 0.3-views-candidate -o build/manifest.apk
 	cp build/manifest.apk $@
 	cp "$(DEX_DIR)"/classes*.dex build/
-	cd build && zip -q arm64-unsigned.apk classes.dex classes2.dex classes3.dex classes4.dex lib/arm64-v8a/libcgw_webview.so
-	zip -q -r build/arm64-unsigned.apk assets
+	mkdir -p build/package-arm64/lib/arm64-v8a build/package-arm64/assets
+	cp build/classes*.dex build/package-arm64/
+	cp build/lib/arm64-v8a/libcgw_webview.so build/package-arm64/lib/arm64-v8a/
+	cp assets/bridge.js build/package-arm64/assets/
+	TZ=UTC touch -t 198001010000 build/package-arm64/classes*.dex build/package-arm64/lib/arm64-v8a/libcgw_webview.so build/package-arm64/assets/bridge.js
+	cd build/package-arm64 && TZ=UTC zip -X -D -q ../arm64-unsigned.apk classes.dex classes2.dex classes3.dex classes4.dex lib/arm64-v8a/libcgw_webview.so assets/bridge.js
 
 build/fixture-unsigned.apk: build/fixture/lib/x86_64/libcgw_webview.so AndroidManifest.xml assets/bridge.js
 	"$(BUILD_TOOLS)/aapt2" link -I "$(ANDROID_JAR)" --manifest AndroidManifest.xml --rename-manifest-package org.isomorphisms.chatgptexporter.e1fixture --version-code 1 --version-name e1-synthetic -o build/fixture-unsigned.apk
 	cp "$(DEX_DIR)"/classes*.dex build/fixture/
-	cd build/fixture && zip -q ../fixture-unsigned.apk classes.dex classes2.dex classes3.dex classes4.dex lib/x86_64/libcgw_webview.so
-	zip -q -r build/fixture-unsigned.apk assets
+	mkdir -p build/package-fixture/lib/x86_64 build/package-fixture/assets
+	cp build/fixture/classes*.dex build/package-fixture/
+	cp build/fixture/lib/x86_64/libcgw_webview.so build/package-fixture/lib/x86_64/
+	cp assets/bridge.js build/package-fixture/assets/
+	TZ=UTC touch -t 198001010000 build/package-fixture/classes*.dex build/package-fixture/lib/x86_64/libcgw_webview.so build/package-fixture/assets/bridge.js
+	cd build/package-fixture && TZ=UTC zip -X -D -q ../fixture-unsigned.apk classes.dex classes2.dex classes3.dex classes4.dex lib/x86_64/libcgw_webview.so assets/bridge.js
 
 fixture: build/fixture-unsigned.apk
 	test -f "$(KEYSTORE)"
@@ -140,3 +148,13 @@ development-candidate: build/arm64-unsigned.apk
 	"$(BUILD_TOOLS)/zipalign" -c -P 16 4 build/chatgpt-exporter-arm64-development-candidate.apk
 	"$(BUILD_TOOLS)/aapt2" dump badging build/chatgpt-exporter-arm64-development-candidate.apk > build/development-manifest.txt
 	sha256sum build/chatgpt-exporter-arm64-development-candidate.apk > build/development.sha256
+
+.PHONY: reproduce-candidate
+reproduce-candidate:
+	cp build/arm64-unsigned.apk build/reproduction-first-unsigned.apk
+	cp build/chatgpt-exporter-arm64-development-candidate.apk build/reproduction-first-signed.apk
+	$(MAKE) -B build/arm64-unsigned.apk
+	cmp build/reproduction-first-unsigned.apk build/arm64-unsigned.apk
+	$(MAKE) development-candidate
+	cmp build/reproduction-first-signed.apk build/chatgpt-exporter-arm64-development-candidate.apk
+	sha256sum build/reproduction-first-unsigned.apk build/arm64-unsigned.apk build/reproduction-first-signed.apk build/chatgpt-exporter-arm64-development-candidate.apk > build/reproduction.sha256

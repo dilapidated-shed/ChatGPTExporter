@@ -49,8 +49,8 @@ check-store-android: build/test_cgw_store_rename build/test_cgw_capture_rename
 
 # Host/loopback fixtures only. Production qualification must explicitly select
 # the pinned ICK producer and shared ai-ci toolchain contract in hosted CI.
-CAPTURE_SOURCES = cgw_web.c cgw_https.c cgw_object_store.c cgw_sha256.c cgw_json.c cgw_capture.c cgw_capture_https.c test_cgw_capture.c
-CAPTURE_HEADERS = cgw_web.h cgw_https.h cgw_object_store.h cgw_sha256.h cgw_json.h cgw_capture.h
+CAPTURE_SOURCES = cgw_web.c cgw_https.c cgw_object_store.c cgw_sha256.c cgw_json.c cgw_views.c cgw_capture.c cgw_capture_https.c test_cgw_capture.c
+CAPTURE_HEADERS = cgw_web.h cgw_https.h cgw_object_store.h cgw_sha256.h cgw_json.h cgw_views.h cgw_capture.h
 .PHONY: check-capture check-capture-mutants
 build/test_cgw_capture: $(CAPTURE_SOURCES) $(CAPTURE_HEADERS)
 	mkdir -p build
@@ -78,14 +78,14 @@ check-capture-mutants: build/mutant-premature build/mutant-omission build/mutant
 	./build/mutant-marker --mutant
 
 .PHONY: production
-production: build/production/cgw_web.o build/production/cgw_https.o build/production/cgw_object_store.o build/production/cgw_sha256.o build/production/cgw_json.o build/production/cgw_capture.o
+production: build/production/cgw_web.o build/production/cgw_https.o build/production/cgw_object_store.o build/production/cgw_sha256.o build/production/cgw_json.o build/production/cgw_views.o build/production/cgw_capture.o
 build/production/%.o: %.c $(CAPTURE_HEADERS)
 	mkdir -p build/production
 	$(CC) $(CFLAGS) $(CURL_CFLAGS) -c $< -o $@
 
 # Credential-free WebView transport through the *same* durable coordinator.
 # This test deliberately models the page-port exchange; no ChatGPT account.
-WEBVIEW_CAPTURE_SOURCES = cgw_web.c cgw_https.c cgw_object_store.c cgw_sha256.c cgw_json.c cgw_capture.c cgw_capture_https.c cgw_webview_bridge.c cgw_webview_capture.c test_cgw_webview_capture.c
+WEBVIEW_CAPTURE_SOURCES = cgw_web.c cgw_https.c cgw_object_store.c cgw_sha256.c cgw_json.c cgw_views.c cgw_capture.c cgw_capture_https.c cgw_webview_bridge.c cgw_webview_capture.c test_cgw_webview_capture.c
 WEBVIEW_CAPTURE_HEADERS = $(CAPTURE_HEADERS) cgw_webview_bridge.h cgw_webview_capture.h
 .PHONY: check-webview-capture
 build/test_cgw_webview_capture: $(WEBVIEW_CAPTURE_SOURCES) $(WEBVIEW_CAPTURE_HEADERS)
@@ -105,6 +105,12 @@ check-sha256: build/test_cgw_sha256
 
 .PHONY: verifier
 verifier: build/cgw-verify
-build/cgw-verify: cgw_verify.c cgw_capture.c cgw_json.c cgw_object_store.c cgw_sha256.c cgw_web.c $(CAPTURE_HEADERS)
+build/cgw-verify: cgw_verify.c cgw_capture.c cgw_json.c cgw_views.c cgw_object_store.c cgw_sha256.c cgw_web.c $(CAPTURE_HEADERS)
 	mkdir -p build
-	$(CC) $(CFLAGS) -o $@ cgw_verify.c cgw_capture.c cgw_json.c cgw_object_store.c cgw_sha256.c cgw_web.c
+	$(CC) $(CFLAGS) -o $@ cgw_verify.c cgw_capture.c cgw_json.c cgw_views.c cgw_object_store.c cgw_sha256.c cgw_web.c
+
+.PHONY: views
+views: build/cgw-views
+build/cgw-views: cgw_views_cli.c cgw_views.c cgw_json.c cgw_sha256.c cgw_views.h cgw_json.h cgw_sha256.h
+	mkdir -p build
+	$(CC) $(CFLAGS) -o $@ cgw_views_cli.c cgw_views.c cgw_json.c cgw_sha256.c

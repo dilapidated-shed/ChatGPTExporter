@@ -16,6 +16,10 @@ int cj_parse(cj_document *document, const unsigned char *bytes, size_t length, s
 void cj_free(cj_document *document);
 size_t cj_member(cj_document *document, size_t object, const char *name);
 int cj_text(const cj_document *document, size_t token, char *output, size_t capacity);
+/* UTF-8 payload length is explicit, so message text may contain U+0000.
+ * Identifier callers must continue using cj_text, which rejects it. */
+int cj_text_bytes(const cj_document *document, size_t token, char *output,
+                  size_t capacity, size_t *length);
 int cj_uint(const cj_document *document, size_t token, uint64_t *output);
 #define CJ_MISSING ((size_t)-1)
 #endif

@@ -53,7 +53,7 @@ describe("bounded offline evidence and independent disk replay", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("Imported 1");
   }), 90000);
-  it.each(["raw", "markdown", "omission", "source", "mode", "symlink", "flag"])("rejects %s mutations despite declared completion", async mutation => temp(async root => {
+  it.each(["raw", "markdown", "omission", "source", "mode", "symlink", "flag", "account-flag", "snapshot-flag", "wrong-state"])("rejects %s mutations despite declared completion", async mutation => temp(async root => {
     const output = await imported(root), reportPath = path.join(output, "reports/offline-import.json");
     const receipt = JSON.parse(await readFile(reportPath, "utf8"));
     const indexPath = path.join(output, "indexes/conversations.jsonl"), row = JSON.parse(await readFile(indexPath, "utf8"));
@@ -64,6 +64,9 @@ describe("bounded offline evidence and independent disk replay", () => {
     if (mutation === "mode") await chmod(path.join(output, row.rawPath), 0o644);
     if (mutation === "symlink") { const location = path.join(output, row.rawPath); const bytes = await readFile(location); await writeFile(path.join(root, "external"), bytes, { mode: 0o600 }); await rm(location); await symlink(path.join(root, "external"), location); }
     if (mutation === "flag") receipt.liveExporterCompletion = true;
+    if (mutation === "account-flag") receipt.fullAccountCaptureComplete = true;
+    if (mutation === "snapshot-flag") receipt.atomicProviderSnapshotProven = true;
+    if (mutation === "wrong-state") receipt.completionState = "complete_for_verified_scope";
     await writeFile(reportPath, JSON.stringify(receipt));
     const result = execute(verify, [output]);
     expect(result.status).not.toBe(0); expect(result.stderr).not.toContain("Synthetic response.");

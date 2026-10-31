@@ -110,5 +110,49 @@ for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
 test "$recovered" = true
 grep -q archive:disk_verified "$output/interrupted-after.log"
 printf '\033[32mPASS\033[0m installed interruption/restart and disk revalidation\n'
+
+# Drive the actual document-tree picker. Only synthetic emulator storage is
+# touched. Every tap is derived from an observed accessibility node's bounds.
+proc tap_attribute(attribute, label, tag) {
+    "$adb" shell uiautomator dump /sdcard/cgw-saf.xml
+    "$adb" pull /sdcard/cgw-saf.xml "$output/saf-$tag.xml"
+    sed 's/></>\n</g' "$output/saf-$tag.xml" | grep -F "$attribute=\"$label\"" | head -1 > "$output/saf-node.txt"
+    var left = "$(sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\].*/\1/p' "$output/saf-node.txt")"
+    var top = "$(sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\].*/\2/p' "$output/saf-node.txt")"
+    test -n "$left"
+    test -n "$top"
+    "$adb" shell input tap "$(expr "$left" + 8)" "$(expr "$top" + 8)"
+}
+"$adb" shell mkdir -p /sdcard/Documents/ChatGPTExporterAcceptance
+"$adb" shell input keyevent 82
+tap_attribute text 'Copy archive to folder' copy
+tap_attribute content-desc 'Show roots' roots
+"$adb" shell uiautomator dump /sdcard/cgw-roots.xml
+"$adb" pull /sdcard/cgw-roots.xml "$output/saf-roots-open.xml"
+var model = "$("$adb" shell getprop ro.product.model | tr -d '\r')"
+if grep -q 'text="Internal storage"' "$output/saf-roots-open.xml" {
+    tap_attribute text 'Internal storage' internal
+} else {
+    tap_attribute text "$model" internal
+}
+tap_attribute text Documents documents
+tap_attribute text ChatGPTExporterAcceptance destination
+tap_attribute text 'USE THIS FOLDER' use-folder
+tap_attribute text ALLOW allow
+var copied = 'false'
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+    "$adb" logcat -d -s CGW-E1:I > "$output/saf-copy.log"
+    if grep -q archive:destination_copied_and_reopened "$output/saf-copy.log" { setvar copied = 'true'; break }
+    sleep 1
+}
+test "$copied" = true
+"$adb" pull /sdcard/Documents/ChatGPTExporterAcceptance "$output/copied"
+var exported = "$(find "$output/copied" -name workspace.txt -print | head -1 | sed 's,/workspace.txt$,,')"
+test -n "$exported"
+chmod -R go-rwx "$exported"
+make -C native verifier
+native/build/cgw-verify "$exported" > "$output/saf-independent-verifier.txt"
+grep -q PASS_BOUNDED_MAIN_ARCHIVED "$output/saf-independent-verifier.txt"
+printf '\033[32mPASS\033[0m actual SAF picker, copy, destination byte revalidation, independent process reopening\n'
 "$adb" shell am force-stop org.isomorphisms.chatgptexporter.e1fixture
 sha256sum "$apk" "$output/installed.apk" > "$output/apk.sha256"

@@ -2,6 +2,7 @@
 #include "cgw_capture.h"
 #include "cgw_json.h"
 #include "cgw_object_store.h"
+#include "cgw_views.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -18,7 +19,7 @@
 #define CGW_CAPTURE_SOURCE_IDENTITY "UNBOUND_HOST_FIXTURE"
 #endif
 enum { CAPTURE_MAX_IDS = 16384, CAPTURE_MAX_NODES = 2048, CAPTURE_MAX_REQUESTS = 32768, JOURNAL_LIMIT = 67108864 };
-typedef struct { char id[257], fingerprint[65], item_hash[65]; unsigned scope; } observed_id;
+typedef struct { char id[257], fingerprint[65], item_hash[65], page_hash[65]; unsigned scope; } observed_id;
 typedef struct { char id[257], parent[257], message_id[257]; size_t token; int parent_index; unsigned color; } graph_node;
 typedef struct { char request[65], object[65]; uint64_t bytes; } replay_raw;
 typedef struct {
@@ -26,6 +27,7 @@ typedef struct {
     cgw_store *store;
     cgw_capture_transport_fn transport;
     void *transport_context;
+    const char *workspace;
     cgw_capture_bounds bounds;
     cgw_capture_report *report;
     observed_id *ids;
@@ -230,11 +232,12 @@ static int inventory(capture_state *s, observed_id *ids, unsigned *count, char i
                 ok = reason(s, "provider_reports_missing_conversations");
             unsigned page_count = 0;
             for (size_t item = items == CJ_MISSING ? d.count : items + 1; ok && item < d.tokens[items].next; item = d.tokens[item].next) {
-                observed_id observed = {{0}, {0}, {0}, scope};
+                observed_id observed = {0}; observed.scope = scope;
                 if (++page_count > s->bounds.page_size || !cj_text(&d, cj_member(&d, item, "id"), observed.id, sizeof(observed.id))
                     || !identifier(observed.id)) { ok = reason(s, "malformed_inventory_id"); break; }
                 (void)hash_bytes(observed.id, strlen(observed.id), observed.fingerprint);
                 (void)hash_bytes(d.bytes + d.tokens[item].begin, d.tokens[item].end - d.tokens[item].begin, observed.item_hash);
+                memcpy(observed.page_hash, raw.sha256, 65);
                 for (unsigned prior = 0; prior < *count; ++prior) if (!strcmp(ids[prior].id, observed.id)) {
                     ok = reason(s, strcmp(ids[prior].item_hash, observed.item_hash) ? "conflicting_inventory_id" : "duplicate_or_overlapping_id"); break;
                 }
@@ -375,9 +378,100 @@ static int load_marker(capture_state *s, const observed_id *id, char hash[65])
     if (strcmp(inventory_hash, s->report->inventory_sha256)) return 0;
     memcpy(hash, object_hash, 65); return 1;
 }
+static int exact_file(int directory, const char *name, const char *expected, size_t length)
+{
+    int fd = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (!private_file(fd)) { if (fd >= 0) close(fd); return 0; }
+    size_t offset = 0; int ok = 1;
+    for (;;) {
+        char bytes[8192]; ssize_t n = read(fd, bytes, sizeof(bytes));
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) { ok = 0; break; }
+        if (!n) break;
+        if ((size_t)n > length - offset || memcmp(bytes, expected + offset, (size_t)n)) { ok = 0; break; }
+        offset += (size_t)n;
+    }
+    close(fd); return ok && offset == length;
+}
+static int derived(capture_state *s, const char *name, const char *bytes, size_t length, int publish)
+{
+    char hash[65]; if (!hash_bytes(bytes, length, hash)) return 0;
+    if (publish) {
+        cgw_store_receipt receipt;
+        if (cgw_store_begin(s->store) != CGW_STORE_OK || cgw_store_write(s->store, (const unsigned char *)bytes, length) != CGW_STORE_OK
+            || cgw_store_commit(s->store, &receipt) != CGW_STORE_OK || strcmp(receipt.sha256, hash)) {
+            cgw_store_abort(s->store); return reason(s, "derived_object_not_durable");
+        }
+        if (!atomic_record(s, name, bytes, length)) return 0;
+    }
+    int objects = openat(s->root, "objects", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    int ok = objects >= 0 && exact_file(objects, hash, bytes, length) && exact_file(s->root, name, bytes, length);
+    if (objects >= 0) close(objects);
+    return ok ? 1 : reason(s, "canonical_artifact_missing_or_modified");
+}
+typedef struct { char json[65], markdown[65]; } view_hashes;
+static int canonical_views(capture_state *s, const observed_id *id, const char *detail_hash, int publish, view_hashes *hashes)
+{
+    /* Locate the listing in its already-hash-verified immutable page. The
+     * independent inventory traversal reconstructs these coordinates itself. */
+    if (!read_object(s, id->page_hash)) return 0;
+    cj_document d;
+    if (!cj_parse(&d, s->response, s->used, s->bounds.max_json_work)) return reason(s, "listing_view_parse_failed");
+    size_t items = cj_member(&d, 0, "items"), length = 0; unsigned char *listing = NULL;
+    if (items != CJ_MISSING && d.tokens[items].kind == CJ_ARRAY) {
+        for (size_t t = items + 1; t < d.tokens[items].next; t = d.tokens[t].next) {
+            char observed[257];
+            if (cj_text(&d, cj_member(&d, t, "id"), observed, sizeof(observed)) && !strcmp(observed, id->id)) {
+                char actual[65]; length = d.tokens[t].end - d.tokens[t].begin;
+                if (hash_bytes(d.bytes + d.tokens[t].begin, length, actual) && !strcmp(actual, id->item_hash)) {
+                    listing = malloc(length); if (listing) memcpy(listing, d.bytes + d.tokens[t].begin, length);
+                }
+                break;
+            }
+        }
+    }
+    cj_free(&d);
+    if (!listing) return reason(s, "listing_view_identity_failed");
+    cgw_views views = {0};
+    int ok = read_object(s, detail_hash) && cgw_views_normalize(s->response, s->used, listing, length,
+                        s->workspace, id->scope, s->bounds.max_json_work, &views);
+    free(listing);
+    if (!ok) return reason(s, "canonical_normalization_failed");
+    view_hashes identity;
+    (void)hash_bytes(views.json, views.json_bytes, identity.json);
+    (void)hash_bytes(views.markdown, views.markdown_bytes, identity.markdown);
+    char name[100]; (void)snprintf(name, sizeof(name), "conversation-%s.json", id->fingerprint);
+    ok = derived(s, name, views.json, views.json_bytes, publish);
+    (void)snprintf(name, sizeof(name), "conversation-%s.md", id->fingerprint);
+    if (ok) ok = derived(s, name, views.markdown, views.markdown_bytes, publish);
+    char receipt[512];
+    int n = snprintf(receipt, sizeof(receipt), "CGWV1\t%s\t%s\t%s\t%s\t%s\t%s\n", s->report->inventory_sha256,
+        detail_hash, id->page_hash, id->item_hash, identity.json, identity.markdown);
+    (void)snprintf(name, sizeof(name), "view-%s.tsv", id->fingerprint);
+    if (ok) ok = n > 0 && n < (int)sizeof(receipt) && derived(s, name, receipt, (size_t)n, publish);
+    if (ok && hashes) *hashes = identity;
+    cgw_views_free(&views); return ok;
+}
+static int canonical_index(capture_state *s, int publish)
+{
+    size_t capacity = (size_t)s->count * 1200 + 2048, used = 0;
+    char *bytes = malloc(capacity); if (!bytes) return reason(s, "index_resources_unavailable");
+    int n = snprintf(bytes, capacity, "{\"schemaVersion\":1,\"archiveContractVersion\":1,\"archiveContract\":\"chatgpt-native-c1\",\"completionState\":\"conversations_complete_assets_partial\",\"nativeWorkspaceSha256\":\"%s\",\"inventorySha256\":\"%s\",\"verifiedScopes\":[\"main\",\"archived\"],\"fullAccountCaptureComplete\":false,\"atomicProviderSnapshotProven\":false,\"assets\":\"not_requested\",\"conversations\":[", s->report->workspace_fingerprint, s->report->inventory_sha256);
+    int ok = n > 0 && (size_t)n < capacity; if (ok) used = (size_t)n;
+    for (unsigned i = 0; ok && i < s->count; ++i) {
+        observed_id *id = &s->ids[i]; char raw_hash[65]; view_hashes hashes;
+        if (load_marker(s, id, raw_hash) != 1 || !read_object(s, raw_hash) || !graph(s, id->id)
+            || !canonical_views(s, id, raw_hash, publish, &hashes)) { ok = 0; break; }
+        n = snprintf(bytes + used, capacity - used, "%s{\"conversationId\":\"%s\",\"scope\":\"%s\",\"rawObject\":\"objects/%s\",\"listingPage\":\"objects/%s\",\"jsonPath\":\"conversation-%s.json\",\"markdownPath\":\"conversation-%s.md\",\"jsonSha256\":\"%s\",\"markdownSha256\":\"%s\"}", i ? "," : "", id->id, id->scope ? "archived" : "main", raw_hash, id->page_hash, id->fingerprint, id->fingerprint, hashes.json, hashes.markdown);
+        if (n < 1 || (size_t)n >= capacity - used) ok = 0; else used += (size_t)n;
+    }
+    if (ok) { memcpy(bytes + used, "]}\n", 3); used += 3; ok = derived(s, "native-index.json", bytes, used, publish); }
+    free(bytes); return ok;
+}
 static int checkpoint_detail(capture_state *s, const observed_id *id, const char *hash)
 {
     if (!read_object(s, hash) || !graph(s, id->id)) return 0;
+    if (!canonical_views(s, id, hash, 1, NULL)) return 0;
     if (!journal(s, "DETAIL\t%s\t%s\t%s\n", s->report->inventory_sha256, id->fingerprint, hash)) return 0;
     marker_name(s, id); char bytes[256];
     int n = snprintf(bytes, sizeof(bytes), "CGW1\t%s\t%s\t%s\n", s->report->inventory_sha256, id->fingerprint, hash);
@@ -465,7 +559,7 @@ static cgw_capture_result cgw_capture_core(const char *root, const char *workspa
 {
     if (!report) return CGW_CAPTURE_REFUSED;
     memset(report, 0, sizeof(*report)); report->result = CGW_CAPTURE_REFUSED;
-    capture_state s = {0}; s.root = s.journal = s.lock = -1; s.bounds = bounds; s.report = report; s.transport = transport; s.transport_context = transport_context;
+    capture_state s = {0}; s.root = s.journal = s.lock = -1; s.bounds = bounds; s.report = report; s.transport = transport; s.transport_context = transport_context; s.workspace = workspace;
     if (!root || !workspace || !identifier(workspace) || !transport || !bounds.page_size || bounds.page_size > 100
         || !bounds.max_conversations || bounds.max_conversations > CAPTURE_MAX_IDS || !bounds.max_requests || bounds.max_requests > CAPTURE_MAX_REQUESTS
         || !bounds.max_graph_nodes || bounds.max_graph_nodes > CAPTURE_MAX_NODES || !bounds.max_response_bytes || bounds.max_response_bytes > 4194304
@@ -507,7 +601,7 @@ static cgw_capture_result cgw_capture_core(const char *root, const char *workspa
         if (marker < 0) { ok = reason(&s, "invalid_completion_marker"); break; }
         if (marker) {
 #ifndef CGW_MUTANT_INVALID_MARKER
-            if (!read_object(&s, hash) || !graph(&s, id->id)) { ok = 0; break; }
+            if (!read_object(&s, hash) || !graph(&s, id->id) || !canonical_views(&s, id, hash, 1, NULL)) { ok = 0; break; }
 #endif
             ++report->reused; ++report->completed;
             if (!journal(&s, "REUSE_VERIFIED\t%s\t%s\n", id->fingerprint, hash)) ok = 0;
@@ -528,6 +622,9 @@ static cgw_capture_result cgw_capture_core(const char *root, const char *workspa
         }
 #endif
     }
+#ifndef CGW_MUTANT_INVALID_MARKER
+    if (ok && !canonical_index(&s, 1)) ok = 0;
+#endif
     if (!journal(&s, "RESULT\t%s\t%s\n", ok ? "BOUNDED_COMPLETE" : "INCONCLUSIVE", report->reason)) ok = 0;
     if (!finish_report(&s, ok)) ok = 0;
     if (ok) report->result = CGW_CAPTURE_COMPLETE;
@@ -555,7 +652,7 @@ cgw_capture_result cgw_capture_revalidate(const char *root, const char *workspac
 {
     if (!report) return CGW_CAPTURE_REFUSED;
     memset(report, 0, sizeof(*report)); report->result = CGW_CAPTURE_REFUSED;
-    capture_state s = {0}; s.root = s.lock = s.journal = -1; s.bounds = bounds; s.report = report;
+    capture_state s = {0}; s.root = s.lock = s.journal = -1; s.bounds = bounds; s.report = report; s.workspace = workspace;
     if (!root || !workspace || !identifier(workspace) || !bounds.page_size || bounds.page_size > 100
         || !bounds.max_conversations || bounds.max_conversations > CAPTURE_MAX_IDS || !bounds.max_requests || bounds.max_requests > CAPTURE_MAX_REQUESTS
         || !bounds.max_graph_nodes || bounds.max_graph_nodes > CAPTURE_MAX_NODES || !bounds.max_response_bytes || bounds.max_response_bytes > 4194304
@@ -603,6 +700,7 @@ cgw_capture_result cgw_capture_revalidate(const char *root, const char *workspac
         if (load_marker(&s, &s.ids[i], hash) != 1 || !read_object(&s, hash) || !graph(&s, s.ids[i].id)) ok = reason(&s, "disk_graph_or_marker_invalid");
         else ++report->completed;
     }
+    if (ok) ok = canonical_index(&s, 0);
     if (ok) report->result = CGW_CAPTURE_COMPLETE;
 done:
     free(s.response); free(s.ids); free(s.replay);

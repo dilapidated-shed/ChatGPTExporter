@@ -31,5 +31,6 @@ int main(int argc, char **argv)
     cgw_capture_result result = cgw_capture_revalidate(argv[1], workspace, bounds, &report);
     printf("disk_validation\t%s\nexpected\t%u\nverified\t%u\nfull_account_export_complete\tfalse\nreason\t%s\n",
            result == CGW_CAPTURE_COMPLETE ? "PASS_BOUNDED_MAIN_ARCHIVED" : "INCONCLUSIVE", report.expected, report.completed, report.reason);
+    printf("completion_state\t%s\n", result == CGW_CAPTURE_COMPLETE ? "conversations_complete_assets_partial" : "incomplete_or_inconclusive");
     return result == CGW_CAPTURE_COMPLETE ? 0 : 1;
 }

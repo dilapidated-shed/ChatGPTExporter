@@ -264,7 +264,7 @@ static int copy_directory(JNIEnv *env, int directory, jobject target, unsigned d
         errno = 0; entry = readdir(entries);
         if (!entry) { if (errno) ok = 0; break; }
         const char *name = entry->d_name;
-        if (!strcmp(name, ".") || !strcmp(name, "..") || !strcmp(name, ".staging") || !strncmp(name, ".capture-stage-", 15) || !strncmp(name, "lock-", 5)) continue;
+        if (!strcmp(name, ".") || !strcmp(name, "..") || !strcmp(name, ".staging") || !strncmp(name, ".capture-stage-", 15)) continue;
         pthread_mutex_lock(&platform_mutex); int stopped = capture_stopped; pthread_mutex_unlock(&platform_mutex);
         if (stopped || (*env)->PushLocalFrame(env, 32) < 0) { ok = 0; break; }
         int input = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC); struct stat state;
@@ -321,6 +321,7 @@ static void *archive_work(void *unused)
         jobject destination = parent ? create_document(env, parent, "vnd.android.document/directory", label) : NULL;
         int root = open(archive_root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         copied = destination && root >= 0 && copy_directory(env, root, destination, 0);
+        if (copied) report("archive:destination_copied_and_reopened");
         if (root >= 0) close(root);
     }
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); state = CGW_CAPTURE_INCONCLUSIVE; }

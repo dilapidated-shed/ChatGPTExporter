@@ -95,8 +95,9 @@ worker, workspace selection, pause/resume/cancel, read-only disk validation
 and Storage Access Framework folder copy. It has no first-party Java/Kotlin,
 Gradle application build, TypeScript runtime, SQLite or native token store.
 
-This candidate retains **bounded raw main/archived graphs**. Native canonical
-JSON/Markdown/index parity, projects/shared/assets, installed SAF qualification,
+This candidate retains **bounded main/archived graphs**, canonical C JSON,
+readable Markdown, provenance receipts and an independently rebuilt index.
+Full native archive-layout parity, projects/shared/assets, installed SAF qualification,
 live-account and physical TAB_P10 acceptance remain incomplete. The established
 development signer is distinct from a production release identity. See
 [Android integration and evidence boundaries](android/CAPTURE_INTEGRATION.md).
@@ -117,14 +118,17 @@ Do not run multiple exporters against the same account simultaneously. The defau
 
 Raw listing/detail/batch revisions are append-preserving under `source/`. Normalized JSON, Markdown, indexes, and reports are derived and rebuildable. Completion markers are written last and contain hashes of every required conversation artifact.
 
-The audited directory is directly consumable by the unified Agent Session Archive adapter; it does not need a giant synthesized `conversations.json`:
+The browser archive's advertised Agent Session Archive interface is shown below.
+Consumer compatibility remains **unqualified** in this integration: the maintained
+adapter source/runtime could not be located for an actual run. Native disk layout
+also requires consumer integration; it does not yet use the browser directory layout.
 
 ```sh
 asm web-import /private/ChatGPTExport-WORKSPACE-FINGERPRINT \
   --provider chatgpt-web --account-label personal --dry-run --json
 ```
 
-See [Architecture](docs/ARCHITECTURE.md), [web contract](docs/WEB_CONTRACT.md), [privacy model](docs/PRIVACY.md), and [troubleshooting](docs/TROUBLESHOOTING.md) for the operational details.
+See [archive contract](docs/ARCHIVE_CONTRACT.md), [Architecture](docs/ARCHITECTURE.md), [web contract](docs/WEB_CONTRACT.md), [privacy model](docs/PRIVACY.md), and [troubleshooting](docs/TROUBLESHOOTING.md) for the operational details.
 
 ## Development
 

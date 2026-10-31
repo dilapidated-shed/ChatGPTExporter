@@ -139,12 +139,12 @@ int cj_parse(cj_document *d, const unsigned char *bytes, size_t length, size_t c
     return 1;
 }
 void cj_free(cj_document *d) { free(d->tokens); d->tokens = NULL; }
-int cj_text(const cj_document *d, size_t index, char *out, size_t capacity)
+int cj_text_bytes(const cj_document *d, size_t index, char *out, size_t capacity, size_t *length)
 {
     if (index == CJ_MISSING || index >= d->count || d->tokens[index].kind != CJ_STRING || capacity == 0) return 0;
     size_t position = d->tokens[index].begin, used = 0;
     while (position < d->tokens[index].end) {
-        unsigned v; if (!scalar(d->bytes, d->tokens[index].end, &position, &v) || v == 0) return 0;
+        unsigned v; if (!scalar(d->bytes, d->tokens[index].end, &position, &v)) return 0;
         unsigned char encoded[4]; size_t n;
         if (v < 128) { encoded[0] = (unsigned char)v; n = 1; }
         else if (v < 2048) { encoded[0] = (unsigned char)(0xc0 | (v >> 6)); encoded[1] = (unsigned char)(0x80 | (v & 63)); n = 2; }
@@ -153,7 +153,12 @@ int cj_text(const cj_document *d, size_t index, char *out, size_t capacity)
         if (n >= capacity - used) return 0;
         memcpy(out + used, encoded, n); used += n;
     }
-    out[used] = 0; return 1;
+    out[used] = 0; if (length) *length = used; return 1;
+}
+int cj_text(const cj_document *d, size_t index, char *out, size_t capacity)
+{
+    size_t length;
+    return cj_text_bytes(d, index, out, capacity, &length) && !memchr(out, 0, length);
 }
 size_t cj_member(cj_document *d, size_t object, const char *name)
 {

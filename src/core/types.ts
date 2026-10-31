@@ -2,6 +2,13 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 
+/** A local verification result never proves a complete provider account. */
+export type ArchiveCompletionState =
+  | "complete_for_verified_scope"
+  | "conversations_complete_assets_partial"
+  | "incomplete_or_inconclusive"
+  | "offline_import_complete";
+
 export type ConversationScope = "main" | "archived" | "project" | "shared";
 export type ScopeTermination =
   | "declared_total_reached"

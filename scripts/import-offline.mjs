@@ -128,7 +128,8 @@ async function persist(opts) {
     }
     await index.sync(); await index.close(); index = null;
     const receipt = {
-      schemaVersion: 2, provider: "chatgpt-offline-file", sourceKind: source.kind, sourceIdentity: source.identity,
+      schemaVersion: 2, archiveContractVersion: 1, fullAccountCaptureComplete: false, atomicProviderSnapshotProven: false,
+      provider: "chatgpt-offline-file", sourceKind: source.kind, sourceIdentity: source.identity,
       sourcePath, sourceSha256: inputHash.sha256, sourceSize: inputHash.byteSize,
       members: supplied.members.map((m, slot) => ({ member: m.name, path: "source/members/" + String(slot + 1).padStart(4, "0") + ".json", sha256: m.sha256, byteSize: m.byteSize })),
       observedConversationCount: count, importedConversationCount: count, providerSnapshot: "unknown", scope: "only_records_in_supplied_file",

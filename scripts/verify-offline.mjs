@@ -27,6 +27,10 @@ export async function verifyOfflineArchive(root, expectedSourceHash) {
   const receipt = json(await readFile(await file("reports/offline-import.json", 4 * 1024 * 1024)));
   if (![1, 2].includes(receipt.schemaVersion) || receipt.provider !== "chatgpt-offline-file" || !Array.isArray(receipt.members)
     || receipt.liveExporterCompletion !== false || receipt.chatgptSessionUsed !== false || receipt.chatgptNetworkCalls !== 0
+    || (receipt.archiveContractVersion !== undefined && receipt.archiveContractVersion !== 1)
+    || (receipt.completionState !== undefined && receipt.completionState !== "offline_import_complete")
+    || (receipt.fullAccountCaptureComplete !== undefined && receipt.fullAccountCaptureComplete !== false)
+    || (receipt.atomicProviderSnapshotProven !== undefined && receipt.atomicProviderSnapshotProven !== false)
     || receipt.scope !== "only_records_in_supplied_file" || receipt.providerSnapshot !== "unknown" || receipt.assetCoverage !== "not_imported") throw new Error("Invalid offline source contract.");
   const sourcePath = receipt.sourcePath ?? (await lstat(path.join(root, "source/input.zip")).then(() => "source/input.zip").catch(() => "source/input.json"));
   if (!["source/input.json", "source/input.zip"].includes(sourcePath)) throw new Error("Invalid source evidence path.");

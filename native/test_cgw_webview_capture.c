@@ -249,6 +249,25 @@ int main(void)
           "private workspace provenance retained for standalone reopening");
     if (provenance_fd >= 0) close(provenance_fd);
     check(separate_verifier(cli_root), "separate cgw-verify process reconstructs archive without credentials or page port");
+    const char *view_kinds[] = { ".json", ".md", "native-index.json", "view-" };
+    for (unsigned kind = 0; kind < 4; ++kind) {
+        DIR *views = opendir(cli_root); struct dirent *view; int mutated = 0;
+        while (views && (view = readdir(views))) {
+            int selected = kind < 2 ? !strncmp(view->d_name, "conversation-", 13) && strstr(view->d_name, view_kinds[kind]) != NULL
+                         : kind == 2 ? !strcmp(view->d_name, view_kinds[kind]) : !strncmp(view->d_name, view_kinds[kind], 5);
+            if (!selected) continue;
+            char path[512]; (void)snprintf(path, sizeof(path), "%s/%s", cli_root, view->d_name);
+            int changed = open(path, O_WRONLY | O_TRUNC | O_NOFOLLOW);
+            mutated = changed >= 0 && write(changed, "false-completion\n", 17) == 17;
+            if (changed >= 0) close(changed);
+            break;
+        }
+        if (views) closedir(views);
+        check(mutated && !separate_verifier(cli_root), "independent process rejects modified JSON/Markdown/index/provenance despite valid raw markers");
+        cgw_capture_report fixed = run_page_size(cli_root, GOOD, 100);
+        check(fixed.result == CGW_CAPTURE_COMPLETE && fixed.reused == 1 && separate_verifier(cli_root),
+              "resume repairs derived views from preserved raw evidence without fetching the detail again");
+    }
     DIR *markers = opendir(cli_root); struct dirent *entry; int removed = 0;
     while (markers && (entry = readdir(markers))) if (!strncmp(entry->d_name, "complete-", 9)) {
         char from[512], held[512];

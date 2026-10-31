@@ -86,17 +86,22 @@ Cat Food physical discovery rather than inference. A candidate arm64 library
 does not establish that the tablet accepts an arm64 APK. Do not push or sign
 an installation for an assumed ABI.
 
-**Remaining implementation/qualification:** installed worker/UI and SAF
-acceptance, native canonical JSON/Markdown/index parity with the Chromium
-normalizer, native projects/shared/assets acquisition, live sign-in/provider
+Native C now emits graph-preserving canonical JSON, readable Markdown,
+hash-bound view receipts and a machine-readable index. The native verifier
+rebuilds these from raw listing/detail evidence and rejects changed views,
+indexes or receipts. See [archive contract](../docs/ARCHIVE_CONTRACT.md) for
+reference coverage, layout differences and the migration boundary.
+
+**Remaining implementation/qualification:** installed SAF acceptance,
+universal canonical/layout parity, native projects/shared/assets acquisition, live sign-in/provider
 calibration, physical tablet storage and lifecycle behavior, production
 certificate/update continuity and current-source ICK shipping qualification.
-The candidate currently captures bounded raw main/archived graphs only.
+The candidate currently captures bounded main/archived graphs and their views.
 
 The ARM64 development candidate reuses the historical E1 development
 certificate; it is not a production signer or a declaration of tablet
 installation/update compatibility. The production package name remains
-`org.isomorphisms.chatgptexporter`, version code 3. No signing key is generated.
+`org.isomorphisms.chatgptexporter`, version code 4. No signing key is generated.
 
 Do not auto-merge, release, copy credentials, infer full provider snapshots,
 or silently change archived raw payloads.
