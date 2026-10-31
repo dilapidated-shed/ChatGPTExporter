@@ -62,7 +62,10 @@ objects and Kitchen/Ike recipe select source-pinned ai-ci ICK producer
 consumer compilation is a separate required current-head gate. The pinned
 shared build-toolchain contract is mandatory. No local-routing test build may
 be packaged as production. Browserless authentication, projects, shared scopes,
-assets, Android and physical A1/C67 acceptance are outside this slice.
+assets and live authentication are outside the bounded archive scope.
+The credential-free WebView transport and independent Android library
+cross-compilation are tracked in draft PR #15; physical TAB_P10 execution and
+installed Android export remain NOT_RUN.
 Every result says `full_account_export_complete=false`.
 
 The initial hostile corruption fixture attempted to write an immutable 0400
