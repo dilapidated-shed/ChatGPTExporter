@@ -45,7 +45,24 @@
     const bytes = new Uint8Array(length);
     let offset = 0;
     for (const part of parts) { bytes.set(part, offset); offset += part.length; }
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    return { value: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), raw: bytes };
+  };
+  // Archive mode is lossless: never strip a provider field from a supposedly
+  // immutable raw object. Refuse the entire response if it could contain
+  // credentials or signed URLs; otherwise preserve the original UTF-8 bytes.
+  const assertRawSafe = (value, depth = 0, work = { count: 0 }) => {
+    if (++work.count > 250000 || depth > 64) throw new Error('raw-schema-bound');
+    if (Array.isArray(value)) {
+      for (const item of value) assertRawSafe(item, depth + 1, work);
+    } else if (value && typeof value === 'object') {
+      for (const [key, item] of Object.entries(value)) {
+        if (secretKey.test(key)) throw new Error('raw-credential-field');
+        assertRawSafe(item, depth + 1, work);
+      }
+    } else if (typeof value === 'string' && /^https?:\/\//i.test(value) &&
+               /[?&](sig|signature|token|X-Amz-|se=|sp=|sv=)/i.test(value)) {
+      throw new Error('raw-signed-url');
+    }
   };
   const attach = event => {
     // Native postWebMessage may have a null source. Child-frame postMessage
@@ -58,11 +75,15 @@
     port.onmessage = async event => {
       if (busy || typeof event.data !== 'string' || event.data.length > 16384) return;
       const fields = event.data.split(';');
-      if (fields.length !== 7 || fields[0] !== 'CGW1' || fields[1] !== 'request' ||
+      const capture = fields.length === 8;
+      if ((fields.length !== 7 && !capture) || fields[0] !== 'CGW1' || fields[1] !== 'request' ||
           !/^[0-9a-f]{32}$/.test(fields[2]) || !/^[1-9][0-9]{0,19}$/.test(fields[3]) ||
           !['GET', 'POST'].includes(fields[4]) ||
           !fields[5].startsWith('/backend-api/') || fields[5].includes('://') ||
-          !/^[A-Za-z0-9_-]*$/.test(fields[6])) return;
+          !/^[A-Za-z0-9_-]*$/.test(fields[6]) ||
+          (capture && (!/^[A-Za-z0-9_-]{1,256}$/.test(fields[7]) ||
+            fields[4] !== 'GET' ||
+            !/^\/backend-api\/(conversations\?|conversation\/)/.test(fields[5])))) return;
       busy = true;
       const controller = new AbortController();
       const deadline = setTimeout(() => controller.abort(), 30000);
@@ -71,23 +92,27 @@
       try {
         const sessionResponse = await fetch('/api/auth/session', { credentials: 'include', redirect: 'error', cache: 'no-store', signal: controller.signal });
         if (!sessionResponse.ok) { reply(sessionResponse.status, 0, 1); return; }
-        const session = await boundedJson(sessionResponse);
+        const session = (await boundedJson(sessionResponse)).value;
         const token = session.accessToken;
         if (typeof token !== 'string' || !token.length || token.length > 16384) {
           reply(401, 0, 1); return;
         }
         const options = { method: fields[4], credentials: 'include', redirect: 'error', cache: 'no-store', signal: controller.signal,
           headers: { Authorization: `Bearer ${token}`, 'X-Authorization': `Bearer ${token}` } };
+        if (capture) options.headers['ChatGPT-Account-Id'] = fields[7];
         if (fields[4] === 'POST') {
           options.headers['Content-Type'] = 'application/json';
           options.body = atob(fields[6].replace(/-/g, '+').replace(/_/g, '/'));
         }
         const response = await fetch(fields[5], options);
         if (!response.ok) { reply(response.status, 0, 1); return; }
-        const body = encoder.encode(JSON.stringify(clean(await boundedJson(response))));
+        const decoded = await boundedJson(response);
+        if (capture) assertRawSafe(decoded.value);
+        const body = capture ? decoded.raw : encoder.encode(JSON.stringify(clean(decoded.value)));
         if (body.length > maximum) throw new Error('oversize');
-        // Refuse reflected credentials even in arbitrary string values.
-        if (new TextDecoder().decode(body).includes(token)) throw new Error('credential-reflection');
+        // Check the original response as well, including arbitrary string values.
+        if (new TextDecoder().decode(decoded.raw).includes(token))
+          throw new Error('credential-reflection');
         for (let offset = 0, sequence = 0; offset < body.length; offset += 8192, sequence++) {
           const chunk = body.subarray(offset, offset + 8192);
           reply(response.status, sequence, offset + chunk.length === body.length ? 1 : 0, base64(chunk));

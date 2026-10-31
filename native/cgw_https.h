@@ -50,6 +50,7 @@ typedef struct {
     unsigned http_status;       /* 0 if no HTTP response */
     size_t received_bytes;      /* includes rejected/HTTP-error response bytes */
     int retryable;              /* a hint, NOT an implicit retry */
+    size_t received_chunks;     /* actual cURL body callback invocations */
 } cgw_fetch_observation;
 
 /* Workspace is optional for the personal account. A provided ID must be an

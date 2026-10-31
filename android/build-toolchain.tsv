@@ -1,2 +1,3 @@
 build_id	target	toolchain	ick_revision	ick_status	ick_evidence
 cgw-e1-native	android-api26-arm64-v8a-and-x86_64	ndk-29.0.14206865	c61e448251744a2f40ad743ebef1a027bdcd2f9d	gap:JNI-and-WebView-platform-adapter-not-qualified-by-ICK	android/TESTING.md
+cgw-webview-durable-capture	android-api26-arm64-v8a-and-x86_64-crosscompile-only	ndk-29.0.14206865	unbound	gap:Android-worker-and-DEX-JNI-producer-not-qualified	android/CAPTURE_INTEGRATION.md

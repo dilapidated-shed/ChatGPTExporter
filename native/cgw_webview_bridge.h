@@ -88,6 +88,11 @@ void cgw_webview_bridge_close(cgw_webview_bridge *bridge);
 cgw_webview_result cgw_webview_bridge_navigation_started(
     cgw_webview_bridge *bridge);
 
+/* Cancel one in-flight command after a transport deadline or dispatch failure.
+ * Late messages become invalid; this does not create a new document/port. */
+cgw_webview_result cgw_webview_bridge_cancel_request(
+    cgw_webview_bridge *bridge);
+
 /* Mark one committed document.  The origin must be exactly
  * https://chatgpt.com and the platform must affirm a main frame. */
 cgw_webview_result cgw_webview_bridge_document_committed(
@@ -100,6 +105,15 @@ cgw_webview_result cgw_webview_bridge_port_ready(cgw_webview_bridge *bridge);
  * The bridge owns request-id, nonce, response limit and chunk sequence. */
 cgw_webview_result cgw_webview_bridge_begin(
     cgw_webview_bridge *bridge, const cgw_input *input,
+    cgw_webview_chunk_fn sink, void *sink_context,
+    cgw_webview_command *command);
+
+/* Variant restricted to conversation inventory/detail capture. Adds exactly
+ * one validated workspace ID after the encoded request body, for page-local
+ * ChatGPT-Account-Id selection. E1 probes retain the original seven fields.
+ * The workspace is an identifier, never a session credential. */
+cgw_webview_result cgw_webview_bridge_begin_workspace(
+    cgw_webview_bridge *bridge, const cgw_input *input, const char *workspace_id,
     cgw_webview_chunk_fn sink, void *sink_context,
     cgw_webview_command *command);
 

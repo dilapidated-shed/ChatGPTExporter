@@ -40,8 +40,19 @@ selection or update-continuity claim. The arm64 production artifact stays
 unsigned; E4 owns its stable identity, signing and delivery.
 
 Host VM tests exercise the static page transport. Actual Android messaging
-requires the separate emulator run. Neither proves physical C67 sign-in,
+requires the separate emulator run. Neither proves physical TAB_P10 sign-in,
 authenticated history coverage, export, resume or independent ai-ci acceptance.
+
+PR #15 additionally builds the native archive coordinator and portable SHA-256
+for Android arm64 and x86_64 as **separate libraries, not packaged export
+features**. The first-party worker/UI-thread capture exchange has not yet been
+wired into the Activity or emulator. See [CAPTURE_INTEGRATION.md](CAPTURE_INTEGRATION.md).
+
+The SVITOO TAB_P10 is now the only active physical Android target. Its ABI,
+storage, installed-signature continuity, mounted SD-card status and actual
+runtime behavior must come from Cat Food observations, not device-model
+guesswork. The historical C67 trial remains in Makefile for provenance but
+is no longer a CI-selected release or acceptance target.
 
 The native build explicitly uses NDK 29.0.14206865. The shared build-policy
 record retains the unqualified ICK/JNI gap; these are NDK candidate builds,

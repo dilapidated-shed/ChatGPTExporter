@@ -189,6 +189,16 @@ cgw_webview_result cgw_webview_bridge_navigation_started(
     return cancelled ? CGW_WEBVIEW_NAVIGATION_CANCELLED : CGW_WEBVIEW_OK;
 }
 
+cgw_webview_result cgw_webview_bridge_cancel_request(cgw_webview_bridge *bridge)
+{
+    if (bridge == NULL) return CGW_WEBVIEW_INVALID_ARGUMENT;
+    if (!bridge->active) return CGW_WEBVIEW_NO_ACTIVE_REQUEST;
+    cancel_active(bridge);
+    bridge->complete = 0;
+    bridge->retryable = 0;
+    return CGW_WEBVIEW_NAVIGATION_CANCELLED;
+}
+
 cgw_webview_result cgw_webview_bridge_document_committed(
     cgw_webview_bridge *bridge, const char *document_origin, int main_frame)
 {
@@ -278,6 +288,43 @@ cgw_webview_result cgw_webview_bridge_begin(
     command->navigation_id = bridge->navigation_id;
     command->request_id = bridge->active_request_id;
     memcpy(command->nonce, bridge->nonce, sizeof(command->nonce));
+    return CGW_WEBVIEW_OK;
+}
+
+static int workspace_identifier(const char *workspace)
+{
+    if (!workspace) return 0;
+    size_t size = strlen(workspace);
+    if (!size || size > 256) return 0;
+    for (size_t i = 0; i < size; ++i) {
+        char ch = workspace[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+              || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-')) return 0;
+    }
+    return 1;
+}
+
+cgw_webview_result cgw_webview_bridge_begin_workspace(
+    cgw_webview_bridge *bridge, const cgw_input *input, const char *workspace,
+    cgw_webview_chunk_fn sink, void *sink_context,
+    cgw_webview_command *command)
+{
+    clear_command(command);
+    if (!input || !workspace_identifier(workspace)
+        || (input->operation != CGW_CONVERSATION_PAGE
+            && input->operation != CGW_CONVERSATION_DETAIL))
+        return CGW_WEBVIEW_REQUEST_REJECTED;
+    cgw_webview_result r = cgw_webview_bridge_begin(
+        bridge, input, sink, sink_context, command);
+    if (r != CGW_WEBVIEW_OK) return r;
+    size_t length = strlen(command->wire), extra = strlen(workspace);
+    if (extra + 2 > sizeof(command->wire) - length) {
+        (void)cgw_webview_bridge_cancel_request(bridge);
+        clear_command(command);
+        return CGW_WEBVIEW_INVALID_ARGUMENT;
+    }
+    command->wire[length++] = ';';
+    memcpy(command->wire + length, workspace, extra + 1);
     return CGW_WEBVIEW_OK;
 }
 
