@@ -90,3 +90,9 @@ build/test_cgw_sha256: cgw_sha256.c cgw_sha256.h test_cgw_sha256.c
 
 check-sha256: build/test_cgw_sha256
 	./build/test_cgw_sha256
+
+.PHONY: verifier
+verifier: build/cgw-verify
+build/cgw-verify: cgw_verify.c cgw_capture.c cgw_json.c cgw_object_store.c cgw_sha256.c cgw_web.c $(CAPTURE_HEADERS)
+	mkdir -p build
+	$(CC) $(CFLAGS) -o $@ cgw_verify.c cgw_capture.c cgw_json.c cgw_object_store.c cgw_sha256.c cgw_web.c

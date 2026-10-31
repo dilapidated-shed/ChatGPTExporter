@@ -50,18 +50,19 @@
   // Archive mode is lossless: never strip a provider field from a supposedly
   // immutable raw object. Refuse the entire response if it could contain
   // credentials or signed URLs; otherwise preserve the original UTF-8 bytes.
-  const assertRawSafe = (value, depth = 0, work = { count: 0 }) => {
+  const assertRawSafe = (value, token, depth = 0, work = { count: 0 }) => {
     if (++work.count > 250000 || depth > 64) throw new Error('raw-schema-bound');
     if (Array.isArray(value)) {
-      for (const item of value) assertRawSafe(item, depth + 1, work);
+      for (const item of value) assertRawSafe(item, token, depth + 1, work);
     } else if (value && typeof value === 'object') {
       for (const [key, item] of Object.entries(value)) {
-        if (secretKey.test(key)) throw new Error('raw-credential-field');
-        assertRawSafe(item, depth + 1, work);
+        if (secretKey.test(key) || key.includes(token)) throw new Error('raw-credential-field');
+        assertRawSafe(item, token, depth + 1, work);
       }
-    } else if (typeof value === 'string' && /^https?:\/\//i.test(value) &&
-               /[?&](sig|signature|token|X-Amz-|se=|sp=|sv=)/i.test(value)) {
-      throw new Error('raw-signed-url');
+    } else if (typeof value === 'string') {
+      if (value.includes(token)) throw new Error('raw-credential-reflection');
+      if (/^https?:\/\//i.test(value) && /[?&](sig|signature|token|X-Amz-|se=|sp=|sv=)/i.test(value))
+        throw new Error('raw-signed-url');
     }
   };
   const attach = event => {
@@ -107,8 +108,9 @@
         const response = await fetch(fields[5], options);
         if (!response.ok) { reply(response.status, 0, 1); return; }
         const decoded = await boundedJson(response);
-        if (capture) assertRawSafe(decoded.value);
-        const body = capture ? decoded.raw : encoder.encode(JSON.stringify(clean(decoded.value)));
+        const safeValue = capture ? decoded.value : clean(decoded.value);
+        assertRawSafe(safeValue, token);
+        const body = capture ? decoded.raw : encoder.encode(JSON.stringify(safeValue));
         if (body.length > maximum) throw new Error('oversize');
         // Check the original response as well, including arbitrary string values.
         if (new TextDecoder().decode(decoded.raw).includes(token))

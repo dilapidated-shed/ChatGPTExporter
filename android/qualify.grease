@@ -59,11 +59,25 @@ for mode in 0 1 2 3 4 5 6 7 8 {
     if test "$mode" = 0 {
         "$adb" shell uiautomator dump /sdcard/e1-result.xml
         "$adb" pull /sdcard/e1-result.xml "$output/controls-after.xml"
-        grep -q 'text="Session check passed - no archive written"' "$output/controls-after.xml"
+        grep -q 'text="Session verified - select a workspace, then Capture"' "$output/controls-after.xml"
         "$adb" shell screencap -p /sdcard/e1-controls.png
         "$adb" pull /sdcard/e1-controls.png "$output/controls.png"
     }
     printf '\033[32mPASS\033[0m synthetic WebView mode %s\n' "$mode"
+}
+for mode in 9 10 {
+    "$adb" shell am force-stop org.isomorphisms.chatgptexporter.e1fixture
+    "$adb" logcat -c
+    "$adb" shell am start -W -n org.isomorphisms.chatgptexporter.e1fixture/org.isomorphisms.webview.BridgeActivity --ei fixture "$mode"
+    var archived = 'false'
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+        "$adb" logcat -d -s CGW-E1:I > "$output/archive-$mode.log"
+        if grep -q archive:bounded_complete "$output/archive-$mode.log" { setvar archived = 'true'; break }
+        sleep 1
+    }
+    test "$archived" = true
+    if test "$mode" = 10 { grep -q archive:verified_restart_reuse "$output/archive-$mode.log" }
+    printf '\033[32mPASS\033[0m installed synthetic capture/restart %s\n' "$mode"
 }
 "$adb" shell am force-stop org.isomorphisms.chatgptexporter.e1fixture
 sha256sum "$apk" "$output/installed.apk" > "$output/apk.sha256"

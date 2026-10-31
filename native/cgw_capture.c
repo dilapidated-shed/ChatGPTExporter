@@ -17,9 +17,10 @@
 #ifndef CGW_CAPTURE_SOURCE_IDENTITY
 #define CGW_CAPTURE_SOURCE_IDENTITY "UNBOUND_HOST_FIXTURE"
 #endif
-enum { CAPTURE_MAX_IDS = 1024, CAPTURE_MAX_NODES = 2048, CAPTURE_MAX_REQUESTS = 512, JOURNAL_LIMIT = 4194304 };
+enum { CAPTURE_MAX_IDS = 16384, CAPTURE_MAX_NODES = 2048, CAPTURE_MAX_REQUESTS = 32768, JOURNAL_LIMIT = 67108864 };
 typedef struct { char id[257], fingerprint[65], item_hash[65]; unsigned scope; } observed_id;
 typedef struct { char id[257], parent[257], message_id[257]; size_t token; int parent_index; unsigned color; } graph_node;
+typedef struct { char request[65], object[65]; uint64_t bytes; } replay_raw;
 typedef struct {
     int root, journal, lock;
     cgw_store *store;
@@ -32,6 +33,8 @@ typedef struct {
     unsigned char *response;
     size_t used;
     char journal_name[96], marker_name[160];
+    replay_raw *replay;
+    unsigned replay_count, replay_position;
 } capture_state;
 
 /* No platform networking dependency in the transport-neutral coordinator.
@@ -130,6 +133,7 @@ static int sink(void *context, const unsigned char *bytes, size_t length)
     if (length > s->bounds.max_response_bytes - s->used || cgw_store_write(s->store, bytes, length) != CGW_STORE_OK) return 0;
     memcpy(s->response + s->used, bytes, length); s->used += length; return 1;
 }
+static int read_object(capture_state *s, const char *hash);
 static int fetch(capture_state *s, const cgw_input *input, cgw_store_receipt *receipt)
 {
     cgw_http_request plan;
@@ -141,7 +145,17 @@ static int fetch(capture_state *s, const cgw_input *input, cgw_store_receipt *re
     uint64_t remaining = s->bounds.max_received_bytes - s->report->received_bytes;
     if (remaining < cap) cap = (size_t)remaining;
     char request_hash[65];
-    if (!hash_bytes(&plan, sizeof(plan), request_hash) || cgw_store_begin(s->store) != CGW_STORE_OK) return reason(s, "object_stage_refused");
+    if (!hash_bytes(&plan, sizeof(plan), request_hash)) return reason(s, "request_identity_failed");
+    if (s->replay) {
+        if (s->replay_position >= s->replay_count) return reason(s, "missing_raw_inventory_evidence");
+        replay_raw *raw = &s->replay[s->replay_position++];
+        if (strcmp(raw->request, request_hash) || !read_object(s, raw->object) || s->used != raw->bytes
+            || s->used > cap) return reason(s, "raw_inventory_replay_mismatch");
+        ++s->report->requests; s->report->received_bytes += s->used;
+        memset(receipt, 0, sizeof(*receipt)); memcpy(receipt->sha256, raw->object, 65); receipt->bytes = raw->bytes;
+        return 1;
+    }
+    if (cgw_store_begin(s->store) != CGW_STORE_OK) return reason(s, "object_stage_refused");
     s->used = 0; ++s->report->requests;
     cgw_fetch_observation observation;
     cgw_fetch_options options = { cap, 30000 };
@@ -482,4 +496,67 @@ cgw_capture_result cgw_capture_with_transport(const char *root, const char *work
 {
     return cgw_capture_core(root, workspace, transport, transport_context,
                             bounds, report);
+}
+
+cgw_capture_result cgw_capture_revalidate(const char *root, const char *workspace,
+                                         cgw_capture_bounds bounds,
+                                         cgw_capture_report *report)
+{
+    if (!report) return CGW_CAPTURE_REFUSED;
+    memset(report, 0, sizeof(*report)); report->result = CGW_CAPTURE_REFUSED;
+    capture_state s = {0}; s.root = s.lock = s.journal = -1; s.bounds = bounds; s.report = report;
+    if (!root || !workspace || !identifier(workspace) || !bounds.page_size || bounds.page_size > 100
+        || !bounds.max_conversations || bounds.max_conversations > CAPTURE_MAX_IDS || !bounds.max_requests || bounds.max_requests > CAPTURE_MAX_REQUESTS
+        || !bounds.max_graph_nodes || bounds.max_graph_nodes > CAPTURE_MAX_NODES || !bounds.max_response_bytes || bounds.max_response_bytes > 4194304
+        || !bounds.max_json_work || bounds.max_json_work > 16000000 || !bounds.max_received_bytes) {
+        (void)reason(&s, "invalid_validation_configuration"); return report->result;
+    }
+    (void)hash_bytes(workspace, strlen(workspace), report->workspace_fingerprint);
+    s.root = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); struct stat st;
+    if (s.root < 0 || fstat(s.root, &st) || st.st_uid != geteuid() || (st.st_mode & 077)) { (void)reason(&s, "private_root_refused"); goto done; }
+    char name[96]; (void)snprintf(name, sizeof(name), "lock-%s", report->workspace_fingerprint);
+    s.lock = openat(s.root, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (!private_file(s.lock) || flock(s.lock, LOCK_SH | LOCK_NB)) { (void)reason(&s, "validation_lock_refused"); goto done; }
+    (void)snprintf(name, sizeof(name), "journal-%s.tsv", report->workspace_fingerprint);
+    s.journal = openat(s.root, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (!private_file(s.journal) || !validate_journal(&s) || lseek(s.journal, 0, SEEK_SET) < 0) goto done;
+    s.response = malloc(bounds.max_response_bytes); s.ids = calloc(bounds.max_conversations, sizeof(*s.ids));
+    s.replay = calloc(bounds.max_requests, sizeof(*s.replay));
+    if (!s.response || !s.ids || !s.replay) { (void)reason(&s, "validation_resources_unavailable"); goto done; }
+    report->result = CGW_CAPTURE_INCONCLUSIVE;
+    FILE *journal_file = fdopen(dup(s.journal), "r");
+    if (!journal_file) goto done;
+    char line[2048]; int ok = 1, begun = 0;
+    while (fgets(line, sizeof(line), journal_file)) {
+        if (!strchr(line, '\n')) { ok = reason(&s, "invalid_journal_line"); break; }
+        if (!strncmp(line, "BEGIN\t", 6)) { s.replay_count = 0; begun = 1; }
+        else if (!strncmp(line, "RAW\t", 4) && begun) {
+            if (s.replay_count >= bounds.max_requests) { ok = reason(&s, "journal_request_ceiling"); break; }
+            replay_raw *raw = &s.replay[s.replay_count]; char extra;
+            if (sscanf(line, "RAW\t%64s\t%64s\t%" SCNu64 "%c", raw->request, raw->object, &raw->bytes, &extra) != 4 || extra != '\n'
+                || !digest_text(raw->request) || !digest_text(raw->object)) { ok = reason(&s, "invalid_raw_journal_record"); break; }
+            ++s.replay_count;
+        }
+    }
+    if (ferror(journal_file)) ok = reason(&s, "journal_read_failed");
+    fclose(journal_file);
+    observed_id *again = calloc(bounds.max_conversations, sizeof(*again)); unsigned count = 0; char identity[65] = {0};
+    if (!again) ok = 0;
+    if (ok) ok = begun && inventory(&s, s.ids, &s.count, report->inventory_sha256, 0);
+    report->expected = s.count;
+    if (ok) ok = inventory(&s, again, &count, identity, 0);
+    if (ok && (count != s.count || strcmp(identity, report->inventory_sha256))) ok = reason(&s, "inventory_drift_across_verification_pass");
+    free(again);
+    for (unsigned i = 0; ok && i < s.count; ++i) {
+        char hash[65];
+        if (load_marker(&s, &s.ids[i], hash) != 1 || !read_object(&s, hash) || !graph(&s, s.ids[i].id)) ok = reason(&s, "disk_graph_or_marker_invalid");
+        else ++report->completed;
+    }
+    if (ok) report->result = CGW_CAPTURE_COMPLETE;
+done:
+    free(s.response); free(s.ids); free(s.replay);
+    if (s.journal >= 0) close(s.journal);
+    if (s.lock >= 0) close(s.lock);
+    if (s.root >= 0) close(s.root);
+    return report->result;
 }

@@ -29,6 +29,12 @@ typedef cgw_fetch_result (*cgw_capture_transport_fn)(
     cgw_fetch_observation *observation);
 
 cgw_capture_bounds cgw_capture_default_bounds(void);
+/* Read-only reconstruction after reopening private disk evidence. Replays the
+ * latest run's two raw inventory passes and rehashes every expected graph and
+ * marker; ignores exporter validation reports and RESULT completion flags. */
+cgw_capture_result cgw_capture_revalidate(const char *private_root,
+    const char *selected_workspace, cgw_capture_bounds bounds,
+    cgw_capture_report *report);
 cgw_capture_result cgw_capture_with_transport(
     const char *private_root, const char *selected_workspace,
     cgw_capture_transport_fn transport, void *transport_context,

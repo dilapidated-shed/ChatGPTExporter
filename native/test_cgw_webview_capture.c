@@ -187,9 +187,17 @@ int main(void)
     check(good.requests == 7 && !good.full_account_export_complete,
           "two exact inventory passes and bounded-only report");
     check(find_detail(root), "raw provider bytes preserved with unknown fields and alternate branch");
+    cgw_capture_bounds verify_bounds = cgw_capture_default_bounds();
+    verify_bounds.page_size = 2; verify_bounds.max_conversations = 8; verify_bounds.max_requests = 32;
+    verify_bounds.max_response_bytes = 16384; verify_bounds.max_received_bytes = 131072;
+    cgw_capture_report disk;
+    check(cgw_capture_revalidate(root, "selected_fixture_workspace", verify_bounds, &disk) == CGW_CAPTURE_COMPLETE
+          && disk.completed == 1, "read-only disk validation replays raw inventory and graph without a page port");
     cgw_capture_report resumed = run(root, GOOD);
     check(resumed.result == CGW_CAPTURE_COMPLETE && resumed.reused == 1 && resumed.requests == 6,
           "restart revalidates persisted immutable object and marker");
+    check(cgw_capture_revalidate(root, "selected_fixture_workspace", verify_bounds, &disk) == CGW_CAPTURE_COMPLETE,
+          "read-only validation also reconstructs a resumed run without new detail requests");
     enum scenario failures[] = { EXPIRED, NAVIGATE, TRUNCATED, INCOMPLETE, FORGED, TOO_LARGE };
     for (size_t i = 0; i < sizeof(failures) / sizeof(failures[0]); ++i) {
         char other[128]; check(new_root(other), "separate failed-capture root");
@@ -203,6 +211,8 @@ int main(void)
     cgw_capture_report partial = run(interrupted_root, INTERRUPTED);
     check(partial.result != CGW_CAPTURE_COMPLETE && partial.completed == 0,
           "partially received bytes cannot become a completion marker");
+    check(cgw_capture_revalidate(interrupted_root, "selected_fixture_workspace", verify_bounds, &disk) != CGW_CAPTURE_COMPLETE,
+          "read-only disk validation refuses interrupted capture without a detail marker");
     cgw_capture_report continued = run(interrupted_root, GOOD);
     check(continued.result == CGW_CAPTURE_COMPLETE && continued.completed == 1
               && find_detail(interrupted_root),

@@ -1,4 +1,4 @@
-/* Android platform adapter only. No archive, graph or provider semantics. */
+/* Android platform adapter. Native archive semantics live in ../native. */
 #include <jni.h>
 #include <android/log.h>
 #include <errno.h>
@@ -7,6 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <limits.h>
+#include <sys/stat.h>
+#include <time.h>
+#include "cgw_webview_capture.h"
+#include "cgw_json.h"
+#include "cgw_sha256.h"
 #include "cgw_webview_bridge.h"
 
 #define ACTIVITY "org/isomorphisms/webview/BridgeActivity"
@@ -17,6 +24,30 @@ static jobject activity, webview, active_port, status_view;
 static cgw_webview_bridge *bridge;
 static char bootstrap[33];
 static int port_verified;
+static pthread_mutex_t platform_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t platform_changed = PTHREAD_COND_INITIALIZER;
+static JavaVM *java_vm;
+static jobject workspace_view, ui_handler, ui_task, export_tree;
+static pthread_t archive_worker;
+static int worker_joinable, capture_running, capture_paused, capture_stopped;
+static int request_waiting, dispatch_pending, worker_action;
+static cgw_webview_result request_result;
+static cgw_webview_command pending_command;
+static char account_ids[64][257], selected_workspace[257], archive_root[PATH_MAX], selection_file[PATH_MAX];
+static unsigned account_count;
+static unsigned char account_bytes[262144];
+static size_t account_used;
+static char worker_status[256];
+static JNIEnv *worker_env;
+static int account_sink(void *, const unsigned char *, size_t);
+static int accept_accounts(JNIEnv *);
+static int archive_initialize(JNIEnv *);
+static void archive_start(JNIEnv *, int);
+static void archive_choose_destination(JNIEnv *);
+static void archive_activity_result(JNIEnv *, jint, jint, jobject);
+static void archive_ui_run(JNIEnv *);
+static void archive_shutdown(JNIEnv *);
+static jobject context_view(JNIEnv *, const char *);
 #ifdef CGW_WEBVIEW_SYNTHETIC
 #include <stdatomic.h>
 static atomic_int fixture;
@@ -116,6 +147,12 @@ static int current_document(JNIEnv *env, jobject view)
 
 static void revoke(JNIEnv *env)
 {
+    if (capture_running && worker_action == 0) {
+        capture_stopped = 1; request_waiting = 0;
+        request_result = CGW_WEBVIEW_NAVIGATION_CANCELLED;
+        pthread_cond_broadcast(&platform_changed);
+    }
+    account_count = 0;
     port_verified = 0;
     if (active_port) {
         jmethodID close = method(env, active_port, "close", "()V");
@@ -126,13 +163,6 @@ static void revoke(JNIEnv *env)
     if (bridge && cgw_webview_bridge_navigation_started(bridge) == CGW_WEBVIEW_NAVIGATION_CANCELLED)
         report("navigation:request_cancelled");
     memset(bootstrap, 0, sizeof(bootstrap));
-}
-
-static int discard(void *context, const unsigned char *bytes, size_t length)
-{
-    (void)context; (void)bytes; (void)length;
-    /* E1 is a consented transport probe, not an export or raw archive sink. */
-    return 1;
 }
 
 static void post(JNIEnv *env, jobject port, const char *wire)
@@ -151,13 +181,15 @@ static void post(JNIEnv *env, jobject port, const char *wire)
 
 static void probe(JNIEnv *env)
 {
+    if (capture_running) { show_status(env, "Pause or finish capture before checking the session"); return; }
     if (!bridge || !port_verified || !current_document(env, webview)) {
         report("probe:not_ready"); show_status(env, "Session check not ready - wait for the page to load"); return;
     }
     cgw_input input = { .operation = CGW_ACCOUNTS_LIST };
     cgw_webview_command command;
+    account_used = 0; account_count = 0;
     cgw_webview_result result = cgw_webview_bridge_begin(
-        bridge, &input, discard, NULL, &command);
+        bridge, &input, account_sink, NULL, &command);
     if (result != CGW_WEBVIEW_OK) { report(cgw_webview_result_name(result)); show_status(env, "Session check unavailable - wait or reload the page"); return; }
     show_status(env, "Checking session...");
     post(env, active_port, command.wire);
@@ -266,7 +298,9 @@ static void on_message(JNIEnv *env, jobject self, jobject port, jobject message)
     if (!get) return;
     jstring value = (*env)->CallObjectMethod(env, message, get);
     if (!value || (*env)->GetStringLength(env, value) > CGW_WEBVIEW_MESSAGE_CAPACITY) {
-        report("message:oversize_rejected"); return;
+        report("message:oversize_rejected");
+        if (request_waiting) { request_waiting = 0; request_result = CGW_WEBVIEW_RESPONSE_TOO_LARGE; pthread_cond_broadcast(&platform_changed); }
+        return;
     }
     const char *wire = (*env)->GetStringUTFChars(env, value, NULL);
     if (!wire) return;
@@ -283,11 +317,19 @@ static void on_message(JNIEnv *env, jobject self, jobject port, jobject message)
         }
     } else if (port_verified) {
         cgw_webview_result result = cgw_webview_bridge_receive(bridge, wire, strlen(wire));
+        cgw_webview_observation observation;
+        cgw_webview_bridge_observation(bridge, &observation);
+        if (request_waiting) {
+            if (result != CGW_WEBVIEW_OK || observation.complete) {
+                request_result = result; request_waiting = 0;
+                pthread_cond_broadcast(&platform_changed);
+            }
+            (*env)->ReleaseStringUTFChars(env, value, wire);
+            return;
+        }
         report(cgw_webview_result_name(result));
         if (result != CGW_WEBVIEW_OK && result != CGW_WEBVIEW_HTTP_FAILURE)
             show_status(env, "Session check rejected - tap Check session to retry");
-        cgw_webview_observation observation;
-        cgw_webview_bridge_observation(bridge, &observation);
         if (result == CGW_WEBVIEW_HTTP_FAILURE) {
             char status[32];
             snprintf(status, sizeof(status), "probe:http:%u", observation.http_status);
@@ -298,7 +340,13 @@ static void on_message(JNIEnv *env, jobject self, jobject port, jobject message)
         }
         if (observation.complete) {
             report("probe:complete");
-            show_status(env, "Session check passed - no archive written");
+            int accounts_ready = accept_accounts(env);
+            show_status(env, accounts_ready
+              ? "Session verified - select a workspace, then Capture"
+              : "Session checked; account inventory is unavailable - capture refused");
+#ifdef CGW_WEBVIEW_SYNTHETIC
+            if (accounts_ready && atomic_load(&fixture) >= 9) archive_start(env, 0);
+#endif
         }
     } else report("message:bootstrap_rejected");
     (*env)->ReleaseStringUTFChars(env, value, wire);
@@ -395,6 +443,18 @@ static jobject intercept(JNIEnv *env, jobject self, jobject view, jobject reques
         body = mode == 1 ? "{}" : "{\"accessToken\":\"e1-synthetic-token\"}";
     } else if (url && strstr(url, "https://chatgpt.com/backend-api/") == url) {
         body = "{\"accounts\":[],\"accessToken\":\"must-not-cross\"}";
+        if (mode == 0 || mode >= 9) body = "{\"accounts\":{\"synthetic\":{\"account\":{\"account_id\":\"synthetic_workspace\"}}}}";
+        if (mode >= 9 && strstr(url, "/backend-api/conversations?")) {
+            const char *offset = strstr(url, "offset=");
+            int populated = offset && strtoull(offset + 7, NULL, 10) == 0 && !strstr(url, "is_archived=true");
+            body = populated ? "{\"offset\":0,\"limit\":100,\"total\":1,\"items\":[{\"id\":\"conversation-1\"}]}"
+                 : strstr(url, "is_archived=true") ? "{\"offset\":0,\"limit\":100,\"total\":0,\"items\":[]}"
+                 : "{\"offset\":1,\"limit\":100,\"total\":1,\"items\":[]}";
+        }
+        if (mode >= 9 && strstr(url, "/backend-api/conversation/conversation-1")) body =
+            "{\"id\":\"conversation-1\",\"current_node\":\"reply\",\"future_field\":{\"retained\":true},\"mapping\":{"
+            "\"root\":{\"id\":\"root\",\"parent\":null,\"children\":[\"reply\"],\"message\":null},"
+            "\"reply\":{\"id\":\"reply\",\"parent\":\"root\",\"children\":[],\"message\":{\"id\":\"message-1\",\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"Synthetic Android capture\"]}}}}}";
         if (mode == 2) status = 401;
         if (mode == 4) { mime = "text/html"; body = "schema drift"; }
     } else { status = 403; }
@@ -432,6 +492,12 @@ static jboolean create_menu(JNIEnv *env, jobject self, jobject menu)
     jobject item = (*env)->CallObjectMethod(env, menu, add, 0, 1, 0, title);
     jmethodID show = method(env, item, "setShowAsAction", "(I)V");
     if (show) (*env)->CallVoidMethod(env, item, show, 6); /* ALWAYS | WITH_TEXT */
+    const char *actions[] = { "Capture / resume", "Pause / continue", "Cancel capture", "Validate saved archive", "Copy archive to folder" };
+    for (unsigned i = 0; i < sizeof(actions) / sizeof(actions[0]); ++i) {
+        jstring label = (*env)->NewStringUTF(env, actions[i]);
+        (*env)->CallObjectMethod(env, menu, add, 0, (jint)i + 2, (jint)i + 1, label);
+        (*env)->DeleteLocalRef(env, label);
+    }
     return JNI_TRUE;
 }
 
@@ -439,7 +505,22 @@ static jboolean select_menu(JNIEnv *env, jobject self, jobject item)
 {
     (void)self;
     jmethodID get = method(env, item, "getItemId", "()I");
-    if (get && (*env)->CallIntMethod(env, item, get) == 1) { probe(env); return JNI_TRUE; }
+    jint id = get ? (*env)->CallIntMethod(env, item, get) : 0;
+    if (id == 1) { probe(env); return JNI_TRUE; }
+    if (id == 2) { archive_start(env, 0); return JNI_TRUE; }
+    if (id == 3) {
+        if (capture_running && worker_action == 0) {
+            capture_paused = !capture_paused; pthread_cond_broadcast(&platform_changed);
+            show_status(env, capture_paused ? "Pause requested - current request may finish" : "Capture continuing");
+        }
+        return JNI_TRUE;
+    }
+    if (id == 4) {
+        capture_stopped = 1; capture_paused = 0; pthread_cond_broadcast(&platform_changed);
+        show_status(env, "Cancellation requested - saved evidence is retained"); return JNI_TRUE;
+    }
+    if (id == 5) { archive_start(env, 2); return JNI_TRUE; }
+    if (id == 6) { archive_choose_destination(env); return JNI_TRUE; }
     return JNI_FALSE;
 }
 
@@ -471,7 +552,8 @@ static int install_controls(JNIEnv *env, jobject view)
     jobject column = context_view(env, "android/widget/LinearLayout");
     jobject toolbar = context_view(env, "android/widget/Toolbar");
     jobject status = context_view(env, "android/widget/TextView");
-    if (!column || !toolbar || !status) return 0;
+    jobject selection = context_view(env, "android/widget/Spinner");
+    if (!column || !toolbar || !status || !selection) return 0;
     jmethodID orientation = method(env, column, "setOrientation", "(I)V");
     jmethodID add = method(env, column, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
     jmethodID actionbar = method(env, activity, "setActionBar", "(Landroid/widget/Toolbar;)V");
@@ -486,6 +568,7 @@ static int install_controls(JNIEnv *env, jobject view)
     if (!wrap || !status_wrap || !fill) return 0;
     (*env)->CallVoidMethod(env, column, add, toolbar, wrap);
     (*env)->CallVoidMethod(env, column, add, status, status_wrap);
+    (*env)->CallVoidMethod(env, column, add, selection, status_wrap);
     (*env)->CallVoidMethod(env, column, add, view, fill);
     (*env)->CallVoidMethod(env, activity, content, column);
     (*env)->CallVoidMethod(env, activity, actionbar, toolbar);
@@ -494,6 +577,7 @@ static int install_controls(JNIEnv *env, jobject view)
     jmethodID title_visible = method(env, bar, "setDisplayShowTitleEnabled", "(Z)V");
     if (title_visible) (*env)->CallVoidMethod(env, bar, title_visible, JNI_FALSE);
     status_view = (*env)->NewGlobalRef(env, status);
+    workspace_view = (*env)->NewGlobalRef(env, selection);
     show_status(env, "Page loading - session check not ready");
     return !(*env)->ExceptionCheck(env);
 }
@@ -536,6 +620,7 @@ static void on_create(JNIEnv *env, jobject self, jobject bundle)
     if (!client || !set_client || !content || !load) return;
     (*env)->CallVoidMethod(env, view, set_client, client);
     if (!install_controls(env, view)) return;
+    if (!archive_initialize(env)) { show_status(env, "Private archive storage or Android dispatch unavailable"); return; }
 #ifdef CGW_WEBVIEW_SYNTHETIC
     jmethodID get_intent = method(env, self, "getIntent", "()Landroid/content/Intent;");
     jobject intent = get_intent ? (*env)->CallObjectMethod(env, self, get_intent) : NULL;
@@ -565,6 +650,10 @@ static void on_destroy(JNIEnv *env, jobject self)
             (*env)->DeleteGlobalRef(env, webview); webview = NULL;
         }
         if (status_view) { (*env)->DeleteGlobalRef(env, status_view); status_view = NULL; }
+        if (workspace_view) { (*env)->DeleteGlobalRef(env, workspace_view); workspace_view = NULL; }
+        if (ui_task) { (*env)->DeleteGlobalRef(env, ui_task); ui_task = NULL; }
+        if (ui_handler) { (*env)->DeleteGlobalRef(env, ui_handler); ui_handler = NULL; }
+        if (export_tree) { (*env)->DeleteGlobalRef(env, export_tree); export_tree = NULL; }
         cgw_webview_bridge_close(bridge); bridge = NULL;
         (*env)->DeleteGlobalRef(env, activity); activity = NULL;
     }
@@ -573,29 +662,37 @@ static void on_destroy(JNIEnv *env, jobject self)
     if (super) (*env)->CallNonvirtualVoidMethod(env, self, base, super);
 }
 
+#include "cgw_capture_android.inc"
+
 /* Conventional JNI symbol resolution avoids initializing the other DEX
  * classes recursively while Activity.<clinit> is loading this library. */
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onCreate
 (JNIEnv *e, jobject s, jobject b) { on_create(e,s,b); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onDestroy
-(JNIEnv *e, jobject s) { on_destroy(e,s); }
+(JNIEnv *e, jobject s) { archive_shutdown(e); on_destroy(e,s); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onBackPressed
-(JNIEnv *e, jobject s) { on_back(e,s); }
+(JNIEnv *e, jobject s) { pthread_mutex_lock(&platform_mutex); on_back(e,s); pthread_mutex_unlock(&platform_mutex); }
 JNIEXPORT jboolean JNICALL Java_org_isomorphisms_webview_BridgeActivity_onCreateOptionsMenu
 (JNIEnv *e, jobject s, jobject m) { return create_menu(e,s,m); }
 JNIEXPORT jboolean JNICALL Java_org_isomorphisms_webview_BridgeActivity_onOptionsItemSelected
-(JNIEnv *e, jobject s, jobject m) { return select_menu(e,s,m); }
+(JNIEnv *e, jobject s, jobject m) { pthread_mutex_lock(&platform_mutex); jboolean result = select_menu(e,s,m); pthread_mutex_unlock(&platform_mutex); return result; }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeClient_onPageStarted
-(JNIEnv *e, jobject s, jobject v, jstring u, jobject i) { on_started(e,s,v,u,i); }
+(JNIEnv *e, jobject s, jobject v, jstring u, jobject i) { pthread_mutex_lock(&platform_mutex); on_started(e,s,v,u,i); pthread_mutex_unlock(&platform_mutex); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeClient_onPageCommitVisible
-(JNIEnv *e, jobject s, jobject v, jstring u) { on_committed(e,s,v,u); }
+(JNIEnv *e, jobject s, jobject v, jstring u) { pthread_mutex_lock(&platform_mutex); on_committed(e,s,v,u); pthread_mutex_unlock(&platform_mutex); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeClient_onPageFinished
-(JNIEnv *e, jobject s, jobject v, jstring u) { on_committed(e,s,v,u); }
+(JNIEnv *e, jobject s, jobject v, jstring u) { pthread_mutex_lock(&platform_mutex); on_committed(e,s,v,u); pthread_mutex_unlock(&platform_mutex); }
 JNIEXPORT jboolean JNICALL Java_org_isomorphisms_webview_BridgeClient_shouldOverrideUrlLoading
 (JNIEnv *e, jobject s, jobject v, jobject r) { return override_url(e,s,v,r); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeClient_onReceivedSslError
-(JNIEnv *e, jobject s, jobject v, jobject h, jobject x) { ssl_error(e,s,v,h,x); }
+(JNIEnv *e, jobject s, jobject v, jobject h, jobject x) { pthread_mutex_lock(&platform_mutex); ssl_error(e,s,v,h,x); pthread_mutex_unlock(&platform_mutex); }
 JNIEXPORT jobject JNICALL Java_org_isomorphisms_webview_BridgeClient_shouldInterceptRequest
 (JNIEnv *e, jobject s, jobject v, jobject r) { return intercept(e,s,v,r); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeMessageCallback_onMessage
-(JNIEnv *e, jobject s, jobject p, jobject m) { on_message(e,s,p,m); }
+(JNIEnv *e, jobject s, jobject p, jobject m) { pthread_mutex_lock(&platform_mutex); on_message(e,s,p,m); pthread_mutex_unlock(&platform_mutex); }
+JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeUiTask_run
+(JNIEnv *e, jobject s) { (void)s; pthread_mutex_lock(&platform_mutex); archive_ui_run(e); pthread_mutex_unlock(&platform_mutex); }
+JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onActivityResult
+(JNIEnv *e, jobject s, jint request, jint result, jobject data) { (void)s; pthread_mutex_lock(&platform_mutex); archive_activity_result(e,request,result,data); pthread_mutex_unlock(&platform_mutex); }
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
+{ (void)reserved; java_vm = vm; return JNI_VERSION_1_6; }

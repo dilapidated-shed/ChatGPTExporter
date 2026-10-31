@@ -169,4 +169,14 @@ describe('Android page transport, synthetic host VM only', () => {
     }
   });
 
+  it('rejects JSON-escaped credential reflection in values and keys before any chunk crosses the port', async () => {
+    for (const wire of [command, `CGW1;request;${nonce};1;GET;/backend-api/conversation/conversation-1;;selected`]) {
+      for (const raw of ['{"value":"synthetic-\\u0074oken"}', '{"synthetic-\\u0074oken":"value"}']) {
+        const test = setup({ responses: [json({ accessToken: 'synthetic-token' }), new Response(raw, { headers: { 'content-type': 'application/json' } })] });
+        test.attach(); await test.port.onmessage?.({ data: wire });
+        expect(test.messages).toEqual([`CGW1;ready;${bootstrap}`, `CGW1;reply;${nonce};1;502;0;1;`]);
+      }
+    }
+  });
+
 });
