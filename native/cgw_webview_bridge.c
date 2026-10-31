@@ -189,6 +189,16 @@ cgw_webview_result cgw_webview_bridge_navigation_started(
     return cancelled ? CGW_WEBVIEW_NAVIGATION_CANCELLED : CGW_WEBVIEW_OK;
 }
 
+cgw_webview_result cgw_webview_bridge_cancel_request(cgw_webview_bridge *bridge)
+{
+    if (bridge == NULL) return CGW_WEBVIEW_INVALID_ARGUMENT;
+    if (!bridge->active) return CGW_WEBVIEW_NO_ACTIVE_REQUEST;
+    cancel_active(bridge);
+    bridge->complete = 0;
+    bridge->retryable = 0;
+    return CGW_WEBVIEW_NAVIGATION_CANCELLED;
+}
+
 cgw_webview_result cgw_webview_bridge_document_committed(
     cgw_webview_bridge *bridge, const char *document_origin, int main_frame)
 {
