@@ -23,6 +23,13 @@ const destination = path.join(releaseRoot, `ChatGPTExporter-${manifest.version}.
 await writeFile(destination, archive);
 console.log(destination);
 
+const offlineRoot = path.join(root, "dist", "offline"), offlineFiles = {};
+for (const name of await listFiles(offlineRoot)) offlineFiles[name] = new Uint8Array(await readFile(path.join(offlineRoot, name)));
+const offlineArchive = zipSync(offlineFiles, { level: 9, mtime: new Date("1980-01-02T00:00:00.000Z") });
+const offlineDestination = path.join(releaseRoot, `ChatGPTExporter-${manifest.version}-offline.zip`);
+await writeFile(offlineDestination, offlineArchive);
+console.log(offlineDestination);
+
 async function listFiles(directory, prefix = "") {
   const output = [];
   const entries = await readdir(directory, { withFileTypes: true });

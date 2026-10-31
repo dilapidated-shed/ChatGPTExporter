@@ -28,3 +28,15 @@ await Promise.all(Object.entries(entries).map(([name, entry]) => build({
 })));
 
 await cp(path.join(root, "public"), output, { recursive: true });
+
+// The offline release uses only Node built-ins at runtime. Keep esbuild and
+// TypeScript on the build host rather than requiring them beside private data.
+const offline = path.join(root, "dist", "offline", "scripts");
+await mkdir(offline, { recursive: true });
+await build({
+  entryPoints: [path.join(root, "src/chatgpt/offline-source.ts")],
+  outfile: path.join(offline, "offline-core.mjs"), bundle: true,
+  format: "esm", platform: "node", target: ["node22"], legalComments: "none",
+});
+for (const name of ["import-offline.mjs", "offline-stream.mjs", "verify-offline.mjs"])
+  await cp(path.join(root, "scripts", name), path.join(offline, name));

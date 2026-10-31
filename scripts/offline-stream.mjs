@@ -169,12 +169,14 @@ export async function sourceMembers(input, directory, maxBytes = Number.MAX_SAFE
     for (let i = tail.length - 22; i >= 0; i--) if (tail.readUInt32LE(i) === 0x06054b50 && i + 22 + tail.readUInt16LE(i + 20) === tail.length) { end = i; break; }
     if (end < 0 || tail.readUInt16LE(end + 4) || tail.readUInt16LE(end + 6)) throw new Error("Malformed or multi-disk ZIP input.");
     let count = tail.readUInt16LE(end + 10), centralSize = tail.readUInt32LE(end + 12), offset = tail.readUInt32LE(end + 16);
+    if (tail.readUInt16LE(end + 8) !== count) throw new Error("Inconsistent ZIP disk entry counts.");
     if (count === 65535 || centralSize === 0xffffffff || offset === 0xffffffff) {
       const locator = await exact(file, tailStart + end - 20, 20);
       if (locator.readUInt32LE(0) !== 0x07064b50 || locator.readUInt32LE(4) || locator.readUInt32LE(16) !== 1) throw new Error("Unsupported ZIP64 disk layout.");
       const zip64 = await exact(file, number64(locator, 8), 56);
       if (zip64.readUInt32LE(0) !== 0x06064b50 || zip64.readUInt32LE(16) || zip64.readUInt32LE(20)) throw new Error("Invalid ZIP64 directory.");
       count = number64(zip64, 32); centralSize = number64(zip64, 40); offset = number64(zip64, 48);
+      if (number64(zip64, 24) !== count) throw new Error("Inconsistent ZIP64 disk entry counts.");
     }
     const centralEnd = offset + centralSize;
     if (centralEnd > tailStart + end || centralEnd > size || count > centralSize / 46) throw new Error("Invalid ZIP directory bounds.");
@@ -194,6 +196,7 @@ export async function sourceMembers(input, directory, maxBytes = Number.MAX_SAFE
           const type = extra.readUInt16LE(at), length = extra.readUInt16LE(at + 2), stop = at + 4 + length; at += 4;
           if (stop > extra.length) throw new Error("Malformed ZIP extra field.");
           if (type === 1) {
+            if (found) throw new Error("Duplicate ZIP64 size field.");
             for (const key of ["size", "compressed", "local"]) if (entry[key] === 0xffffffff) { if (at + 8 > stop) throw new Error("Truncated ZIP64 field."); entry[key] = number64(extra, at); at += 8; }
             found = true;
           }
@@ -202,7 +205,7 @@ export async function sourceMembers(input, directory, maxBytes = Number.MAX_SAFE
         if (!found) throw new Error("Missing ZIP64 sizes.");
       }
       if (/^conversations(?:[-_][0-9]+)?\.json$/i.test(name.split("/").at(-1))) {
-        if (entry.flags & 1 || ![0, 8].includes(entry.method)) throw new Error("Encrypted or unsupported conversation ZIP member.");
+        if (entry.flags & 65 || ![0, 8].includes(entry.method)) throw new Error("Encrypted or unsupported conversation ZIP member.");
         unpacked += entry.size;
         if (!Number.isSafeInteger(unpacked) || unpacked > maxBytes) throw new Error("Unpacked source exceeds the configured byte limit.");
         entries.push(entry);
@@ -216,6 +219,9 @@ export async function sourceMembers(input, directory, maxBytes = Number.MAX_SAFE
     for (const [i, entry] of entries.entries()) {
       const local = await exact(file, entry.local, 30);
       if (local.readUInt32LE(0) !== 0x04034b50 || local.readUInt16LE(8) !== entry.method || local.readUInt16LE(6) !== entry.flags) throw new Error("ZIP local/central mismatch.");
+      if (!(entry.flags & 8) && (local.readUInt32LE(14) !== entry.crc
+        || local.readUInt32LE(18) !== 0xffffffff && local.readUInt32LE(18) !== entry.compressed
+        || local.readUInt32LE(22) !== 0xffffffff && local.readUInt32LE(22) !== entry.size)) throw new Error("ZIP local/central size or CRC mismatch.");
       const localName = await exact(file, entry.local + 30, local.readUInt16LE(26));
       if (localName.toString("utf8") !== entry.name) throw new Error("ZIP local member identity mismatch.");
       const start = entry.local + 30 + local.readUInt16LE(26) + local.readUInt16LE(28), stop = start + entry.compressed;

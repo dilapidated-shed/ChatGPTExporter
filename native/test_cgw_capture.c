@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
+#include <openssl/sha.h>
 #include <openssl/x509v3.h>
 #include <signal.h>
 #include <stdio.h>
@@ -342,7 +343,27 @@ int main(int argc, char **argv)
     }
     if (find_name(root, "journal-", path)) {
         int fd = open(path, O_WRONLY | O_APPEND); check(fd >= 0 && write(fd, "TORN", 4) == 4, "interrupted-write fixture leaves an actual torn tail"); if (fd >= 0) close(fd);
-        report = run(root, GOOD, bounds()); check(report.result != CGW_CAPTURE_COMPLETE, "interrupted journal tail retained incomplete");
+        struct stat original_state; unsigned char *original = NULL; size_t size = 0;
+        fd = open(path, O_RDONLY);
+        if (fd >= 0 && !fstat(fd, &original_state) && original_state.st_size > 0 && original_state.st_size < 1048576) {
+            size = (size_t)original_state.st_size; original = malloc(size);
+            check(original && read(fd, original, size) == (ssize_t)size, "retain independent copy of entire torn journal");
+        }
+        if (fd >= 0) close(fd);
+        check(original != NULL, "independent torn-journal bytes available");
+        report = run(root, GOOD, bounds());
+        check(report.result == CGW_CAPTURE_COMPLETE && report.reused >= 1, "interrupted journal recovers by preserving old evidence and revalidating raw objects");
+        if (original) {
+            unsigned char digest[SHA256_DIGEST_LENGTH]; char identity[65], retained_path[512];
+            (void)SHA256(original, size, digest);
+            for (size_t i = 0; i < sizeof(digest); ++i) (void)snprintf(identity + i * 2, 3, "%02x", digest[i]);
+            (void)snprintf(retained_path, sizeof(retained_path), "%s/objects/%s", root, identity);
+            unsigned char *retained = malloc(size + 1); fd = open(retained_path, O_RDONLY);
+            ssize_t n = fd >= 0 && retained ? read(fd, retained, size + 1) : -1;
+            check(n == (ssize_t)size && !memcmp(original, retained, size), "old torn journal survives byte-for-byte under independently calculated OpenSSL hash");
+            if (fd >= 0) close(fd);
+            free(retained); free(original);
+        }
     }
     }
     struct rusage usage; if (!getrusage(RUSAGE_SELF, &usage)) printf("fixture_process_peak_rss_kib\t%ld\n", usage.ru_maxrss);

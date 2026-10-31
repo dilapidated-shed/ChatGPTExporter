@@ -394,6 +394,51 @@ static int validate_journal(capture_state *s)
     }
     return last == '\n' ? 1 : reason(s, "torn_journal_retained_incomplete");
 }
+static int recover_torn_journal(capture_state *s)
+{
+    /* Preserve every old byte as an immutable object before replacing the
+     * mutable journal with its verified line prefix. A crash cannot destroy
+     * the torn tail, and read-only validation never performs this repair. */
+    if (lseek(s->journal, 0, SEEK_SET) < 0 || cgw_store_begin(s->store) != CGW_STORE_OK) return reason(s, "journal_recovery_stage_refused");
+    unsigned char buffer[8192]; off_t total = 0, prefix = 0; int ok = 1;
+    for (;;) {
+        ssize_t n = read(s->journal, buffer, sizeof(buffer));
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) { ok = 0; break; }
+        if (!n) break;
+        if (total > JOURNAL_LIMIT - n || cgw_store_write(s->store, buffer, (size_t)n) != CGW_STORE_OK) { ok = 0; break; }
+        for (ssize_t i = 0; i < n; ++i) if (buffer[i] == '\n') prefix = total + i + 1;
+        total += n;
+    }
+    cgw_store_receipt retained;
+    if (!ok || cgw_store_commit(s->store, &retained) != CGW_STORE_OK) { cgw_store_abort(s->store); return reason(s, "torn_journal_preservation_failed"); }
+    char record[160];
+    int length = snprintf(record, sizeof(record), "RECOVERED_JOURNAL\t%s\t%lld\t%lld\n", retained.sha256, (long long)prefix, (long long)total);
+    if (length < 1 || length >= (int)sizeof(record) || prefix > JOURNAL_LIMIT - length) return reason(s, "journal_recovery_ceiling");
+    unsigned char random[16]; int random_fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    ssize_t got = random_fd >= 0 ? read(random_fd, random, sizeof(random)) : -1;
+    if (random_fd >= 0) close(random_fd);
+    if (got != (ssize_t)sizeof(random)) return reason(s, "journal_recovery_entropy_failed");
+    char hash[65], temporary[96]; (void)hash_bytes(random, sizeof(random), hash);
+    (void)snprintf(temporary, sizeof(temporary), ".capture-stage-%s", hash);
+    int replacement = openat(s->root, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (!private_file(replacement) || lseek(s->journal, 0, SEEK_SET) < 0) { if (replacement >= 0) close(replacement); return reason(s, "journal_recovery_private_stage_refused"); }
+    off_t copied = 0;
+    while (copied < prefix) {
+        size_t wanted = prefix - copied > (off_t)sizeof(buffer) ? sizeof(buffer) : (size_t)(prefix - copied);
+        ssize_t n = read(s->journal, buffer, wanted);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0 || !write_all(replacement, buffer, (size_t)n)) { ok = 0; break; }
+        copied += n;
+    }
+    if (ok) ok = write_all(replacement, record, (size_t)length) && !fsync(replacement);
+    if (close(replacement)) ok = 0;
+    if (!ok || renameat(s->root, temporary, s->root, s->journal_name) || fsync(s->root)) return reason(s, "journal_recovery_publication_failed");
+    close(s->journal);
+    s->journal = openat(s->root, s->journal_name, O_RDWR | O_APPEND | O_NOFOLLOW | O_CLOEXEC);
+    if (!private_file(s->journal) || !validate_journal(s)) return reason(s, "recovered_journal_refused");
+    s->report->reason[0] = 0; return 1;
+}
 static int finish_report(capture_state *s, int complete)
 {
     char bytes[2048], filename[96];
@@ -430,8 +475,10 @@ static cgw_capture_result cgw_capture_core(const char *root, const char *workspa
     if (!private_file(s.lock) || flock(s.lock, LOCK_EX | LOCK_NB)) { (void)reason(&s, "private_capture_lock_refused"); goto done; }
     (void)snprintf(s.journal_name, sizeof(s.journal_name), "journal-%s.tsv", report->workspace_fingerprint);
     s.journal = openat(s.root, s.journal_name, O_RDWR | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
-    if (!private_file(s.journal) || !validate_journal(&s)) goto done;
+    if (!private_file(s.journal)) { (void)reason(&s, "private_journal_refused"); goto done; }
     s.store = cgw_store_open(root);
+    if (!s.store) goto done;
+    if (!validate_journal(&s) && (strcmp(report->reason, "torn_journal_retained_incomplete") || !recover_torn_journal(&s))) goto done;
     s.response = malloc(bounds.max_response_bytes); s.ids = calloc(bounds.max_conversations, sizeof(*s.ids));
     observed_id *again = calloc(bounds.max_conversations, sizeof(*again));
     if (!s.store || !s.response || !s.ids || !again) { free(again); (void)reason(&s, "capture_resources_unavailable"); goto done; }

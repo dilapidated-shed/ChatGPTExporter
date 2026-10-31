@@ -8,7 +8,6 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { build } from "esbuild";
 import { ByteBudget, DEFAULT_RECORD_BYTES, conversationRecords, hashFile, sourceMembers, sha256 } from "./offline-stream.mjs";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
@@ -78,8 +77,11 @@ async function acquire(opts, destination) {
   return { kind, identity };
 }
 export async function importCore() {
+  const packaged = new URL("./offline-core.mjs", import.meta.url);
+  if (existsSync(packaged)) return import(packaged.href);
   const scratch = await mkdtemp(path.join(tmpdir(), "chatgpt-offline-code-"));
   try {
+    const { build } = await import("esbuild");
     const result = await build({ entryPoints: [path.join(projectRoot, "src/chatgpt/offline-source.ts")], bundle: true, platform: "node", format: "esm", write: false, target: "node22", legalComments: "none" });
     const bundled = path.join(scratch, "offline-core.mjs");
     await writeFile(bundled, result.outputFiles[0].contents, { mode: 0o600 });

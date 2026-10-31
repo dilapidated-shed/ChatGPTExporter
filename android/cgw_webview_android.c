@@ -188,10 +188,10 @@ static void probe(JNIEnv *env)
     }
     cgw_input input = { .operation = CGW_ACCOUNTS_LIST };
     cgw_webview_command command;
-    account_used = 0; account_count = 0;
     cgw_webview_result result = cgw_webview_bridge_begin(
         bridge, &input, account_sink, NULL, &command);
     if (result != CGW_WEBVIEW_OK) { report(cgw_webview_result_name(result)); show_status(env, "Session check unavailable - wait or reload the page"); return; }
+    account_used = 0; account_count = 0;
     show_status(env, "Checking session...");
     post(env, active_port, command.wire);
 }

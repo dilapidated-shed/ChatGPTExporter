@@ -1,6 +1,7 @@
 # WebView → native durable capture integration (PR #15)
 
-This is a draft source integration, **not** an authenticated or installed export.
+This is a draft native application integration. Installed synthetic qualification
+and live/physical acceptance are recorded separately; no release is accepted.
 
 ## Existing source lineage
 
@@ -37,10 +38,20 @@ private platform libcrypto is needed for this code.
    order, response cap and terminal status. The coordinator persists staging
    first; only successfully validated graph objects receive durable markers.
    Failure aborts staging, and no full-account completion claim is made.
-6. A capture-specific `cgw_webview_capture_exchange_fn` is intentionally
-   separated from the coordinator. It must run on a capture worker and
-   serialize JNI/UI-thread port dispatch and callbacks. Without that working
-   platform exchange the installed E1 app remains a **session probe only**.
+6. `android/cgw_capture_android.inc` now connects that exchange to a pthread
+   capture worker. A direct-DEX native TimerTask callback is posted through
+   Android Handler; only its UI-thread callback touches the WebMessagePort.
+   One mutex serializes bridge operations and a condition variable carries
+   completion, navigation, cancellation and deadlines back to the worker.
+7. Native controls expose session/account discovery, explicit workspace
+   selection, capture/resume, cooperative pause, cancellation and disk
+   revalidation. Private files are selected through `getFilesDir`, with a
+   separate archive per workspace fingerprint. No cookie/token file is used.
+8. The folder-copy action uses Android's normal document-tree picker. It
+   validates private source evidence, creates a new destination directory,
+   copies files without overwriting an earlier archive, then reopens and
+   hashes each destination file. SAF behavior still requires installed tests;
+   it does not inherit success from C compilation.
 
 ## Tests and evidence boundaries
 
@@ -53,9 +64,17 @@ private platform libcrypto is needed for this code.
 - `make -C android native` — NDK builds candidate native WebView libraries
   and separate capture libraries for arm64 and x86_64. These are compilation
   targets, not assertions about the physical tablet ABI.
-- The E1 Android 14 emulator still exercises sign-in probe callbacks, not
-  the end-to-end durable capture integration. The signed emulator fixture is
-  not the user release package.
+- The Android 14 synthetic fixture includes native worker capture and a
+  force-stop/relaunch that must rehash and reuse the saved conversation.
+  Its direct-DEX generator is application-owned Idriç metadata using the
+  retained android-NDK encoder. Test networking remains intercepted entirely.
+- `cgw_capture_revalidate` and the standalone C `cgw-verify` command reopen
+  the latest journal and reconstruct both raw inventory traversals, expected
+  identities, graph topology and object hashes. Exporter RESULT/validation
+  flags do not establish acceptance. The verifier never repairs files.
+- A capture encountering a torn journal first preserves all old bytes as a
+  SHA-256 object, then atomically publishes the valid prefix and a recovery
+  receipt. Synthetic host tests independently check the retained bytes/hash.
 
 ## Android TAB_P10 handoff
 
@@ -67,11 +86,17 @@ Cat Food physical discovery rather than inference. A candidate arm64 library
 does not establish that the tablet accepts an arm64 APK. Do not push or sign
 an installation for an assumed ABI.
 
-**Still blocked:** real platform worker/UI exchange, installed Android
-archive and process-death recovery, live first-party sign-in and authorized
-conversation retrieval, complete coverage of projects/shared conversations/
-assets, production certificate/update continuity, source-pinned ICK/DEX
-producer acceptance and independent Android runtime qualification.
+**Remaining implementation/qualification:** installed worker/UI and SAF
+acceptance, native canonical JSON/Markdown/index parity with the Chromium
+normalizer, native projects/shared/assets acquisition, live sign-in/provider
+calibration, physical tablet storage and lifecycle behavior, production
+certificate/update continuity and current-source ICK shipping qualification.
+The candidate currently captures bounded raw main/archived graphs only.
+
+The ARM64 development candidate reuses the historical E1 development
+certificate; it is not a production signer or a declaration of tablet
+installation/update compatibility. The production package name remains
+`org.isomorphisms.chatgptexporter`, version code 3. No signing key is generated.
 
 Do not auto-merge, release, copy credentials, infer full provider snapshots,
 or silently change archived raw payloads.

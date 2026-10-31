@@ -126,3 +126,17 @@ c67-trial: build/arm64-unsigned.apk
 	"$(BUILD_TOOLS)/aapt2" dump badging build/chatgpt-exporter-c67-e1.apk > build/c67-manifest.txt
 	grep -q "native-code: 'arm64-v8a'" build/c67-manifest.txt
 	sha256sum build/chatgpt-exporter-c67-e1.apk > build/c67.sha256
+
+# Review candidate only: reuse the established E1 development certificate.
+# No key generation, production promotion or installed-signer assumption.
+.PHONY: development-candidate
+development-candidate: build/arm64-unsigned.apk
+	keytool -exportcert -keystore "$(KEYSTORE)" -storetype PKCS12 -storepass wegert-debug -alias wegert-debug -file build/development-cert.der
+	printf '%s  build/development-cert.der\n' 'de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9' | sha256sum -c -
+	"$(BUILD_TOOLS)/zipalign" -P 16 -f 4 build/arm64-unsigned.apk build/arm64-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" sign --ks "$(KEYSTORE)" --ks-type PKCS12 --ks-pass pass:wegert-debug --key-pass pass:wegert-debug --ks-key-alias wegert-debug --out build/chatgpt-exporter-arm64-development-candidate.apk build/arm64-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" verify --verbose --print-certs build/chatgpt-exporter-arm64-development-candidate.apk > build/development-signature.txt
+	grep -q 'certificate SHA-256 digest: de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9' build/development-signature.txt
+	"$(BUILD_TOOLS)/zipalign" -c -P 16 4 build/chatgpt-exporter-arm64-development-candidate.apk
+	"$(BUILD_TOOLS)/aapt2" dump badging build/chatgpt-exporter-arm64-development-candidate.apk > build/development-manifest.txt
+	sha256sum build/chatgpt-exporter-arm64-development-candidate.apk > build/development.sha256

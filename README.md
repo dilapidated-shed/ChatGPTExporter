@@ -52,7 +52,7 @@ npm run import:offline -- --github-repo OWNER/PRIVATE_REPO --github-path exports
 
 The Drive route calls your **locally authorized**
 `google-drive-files download FILE_ID` from
-[`dilapidated-shed/cloud-storage-api`](https://github.com/dilapidated-shed/cloud-storage-api).
+[`isomorphisms/cloud-storage-api`](https://github.com/isomorphisms/cloud-storage-api).
 The GitHub route calls your locally authorized `gh api` for the named
 repository file. Both are read-only source operations; credentials remain
 in their respective CLIs, and this importer does not accept or log tokens.
@@ -70,12 +70,36 @@ and `assetCoverage: "not_imported"`. This mode does not create a
 **live-export completion marker**. It preserves the original ZIP, but this
 initial importer does **not** extract or fetch ZIP attachment binaries.
 
-The first bounded implementation accepts up to **64 MiB** of input and
-extracted conversation JSON by default; `--max-bytes` can raise this to
-256 MiB. Oversized inputs fail explicitly. Very large multi-gigabyte exports
-will require a subsequent streaming import path rather than a silent truncated
-archive. A Drive/GitHub file containing ordinary notes rather than the
+Input files, remote CLI output and ZIP/ZIP64 members now stream to private
+disk. There is no fixed 256 MiB input ceiling. `--max-bytes` optionally sets a
+total/unpacked budget; `--max-record-bytes` bounds one conversation, with a
+64 MiB default. A 260 MiB source is tested under a 96 MiB JavaScript heap.
+A Drive/GitHub file containing ordinary notes rather than the
 ChatGPT conversation graph schema will be rejected, not mislabeled as history.
+
+`npm run verify:offline -- /private/chatgpt-import` independently reopens the
+source, re-extracts ZIP members with CRC/identity checks, reconstructs every
+expected graph and verifies raw, normalized, Markdown and index hashes. It
+rejects omissions even when completion counts are forged. Historical offline
+v1 receipts remain supported. Verification does not access ChatGPT or Drive.
+
+The offline package contains a prebuilt canonical normalizer and needs Node 22
+or newer at runtime, without npm packages. Run its `scripts/import-offline.mjs`
+and `scripts/verify-offline.mjs` with Node. Source builds and deterministic
+extension/offline ZIPs are produced by `npm run package`.
+
+## Native Android candidate
+
+The direct-DEX/C11 application now connects the WebView to a native capture
+worker, workspace selection, pause/resume/cancel, read-only disk validation
+and Storage Access Framework folder copy. It has no first-party Java/Kotlin,
+Gradle application build, TypeScript runtime, SQLite or native token store.
+
+This candidate retains **bounded raw main/archived graphs**. Native canonical
+JSON/Markdown/index parity, projects/shared/assets, installed SAF qualification,
+live-account and physical TAB_P10 acceptance remain incomplete. The established
+development signer is distinct from a production release identity. See
+[Android integration and evidence boundaries](android/CAPTURE_INTEGRATION.md).
 
 ## Export your history
 

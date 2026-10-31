@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cgw_webview_capture.h"
 #include <dirent.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -198,6 +199,18 @@ int main(void)
           "restart revalidates persisted immutable object and marker");
     check(cgw_capture_revalidate(root, "selected_fixture_workspace", verify_bounds, &disk) == CGW_CAPTURE_COMPLETE,
           "read-only validation also reconstructs a resumed run without new detail requests");
+    char journal_path[512];
+    (void)snprintf(journal_path, sizeof(journal_path), "%s/journal-%s.tsv", root, good.workspace_fingerprint);
+    int torn = open(journal_path, O_WRONLY | O_APPEND);
+    check(torn >= 0 && write(torn, "TORN_PARTIAL_RECORD", 19) == 19, "inject actual torn journal bytes");
+    if (torn >= 0) close(torn);
+    check(cgw_capture_revalidate(root, "selected_fixture_workspace", verify_bounds, &disk) != CGW_CAPTURE_COMPLETE,
+          "read-only verifier never repairs or trusts a torn journal");
+    cgw_capture_report repaired = run(root, GOOD);
+    check(repaired.result == CGW_CAPTURE_COMPLETE && repaired.reused == 1,
+          "capture preserves torn bytes before recovering a resumable journal prefix");
+    check(cgw_capture_revalidate(root, "selected_fixture_workspace", verify_bounds, &disk) == CGW_CAPTURE_COMPLETE,
+          "recovered archive independently reopens and validates");
     enum scenario failures[] = { EXPIRED, NAVIGATE, TRUNCATED, INCOMPLETE, FORGED, TOO_LARGE };
     for (size_t i = 0; i < sizeof(failures) / sizeof(failures[0]); ++i) {
         char other[128]; check(new_root(other), "separate failed-capture root");

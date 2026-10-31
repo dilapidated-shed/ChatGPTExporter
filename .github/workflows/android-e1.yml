@@ -116,6 +116,8 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=0
         run: ${{ github.workspace }}/grease-runtime/_bin/cxx-asan/ysh android/prepare-emulator.grease
+      - name: Sign review candidate with the unchanged development identity
+        run: make -C android development-candidate DEX_DIR=${{ github.workspace }}/direct-dex DEX_SOURCE=${{ github.event.pull_request.head.sha || github.sha }} BUILD_TOOLS=$ANDROID_HOME/build-tools/36.0.0 ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar KEYSTORE=${{ github.workspace }}/fixture-signer/_/build/app/wegert-debug.keystore
       - name: Exercise actual Android WebMessagePort callbacks
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         env:

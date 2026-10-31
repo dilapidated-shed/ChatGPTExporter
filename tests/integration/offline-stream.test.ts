@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile, readFile, rm, chmod, symlink, open } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, chmod, symlink, open, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -22,6 +22,19 @@ async function imported(root: string, shape: unknown = [conversationDetail({ id:
   return output;
 }
 describe("bounded offline evidence and independent disk replay", () => {
+  it("runs the built offline importer and verifier outside the checkout without npm runtime dependencies", async () => temp(async root => {
+    const build = fileURLToPath(new URL("../../scripts/build.mjs", import.meta.url));
+    const built = spawnSync(process.execPath, [build], { cwd: path.dirname(path.dirname(build)), encoding: "utf8", timeout: 20000 });
+    expect(built.status, built.stderr).toBe(0);
+    const runtime = path.join(root, "runtime");
+    await cp(fileURLToPath(new URL("../../dist/offline", import.meta.url)), runtime, { recursive: true });
+    const input = path.join(root, "input.json"), output = path.join(root, "archive");
+    await writeFile(input, JSON.stringify([conversationDetail({ id: "synthetic-package" })]));
+    const imported = execute(path.join(runtime, "scripts/import-offline.mjs"), ["--file", input, "--output", output]);
+    expect(imported.status, imported.stderr).toBe(0);
+    const verified = execute(path.join(runtime, "scripts/verify-offline.mjs"), [output]);
+    expect(verified.status, verified.stderr).toBe(0);
+  }));
   it.each(["array", "wrapper", "single", "empty"])("replays %s sources from retained input", async shape => temp(async root => {
     const record = conversationDetail({ id: "synthetic-1" });
     const output = await imported(root, shape === "array" ? [record] : shape === "wrapper" ? { extra: { future: true }, conversations: [record], tail: null } : shape === "single" ? record : []);
