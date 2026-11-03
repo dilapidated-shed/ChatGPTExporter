@@ -89,10 +89,13 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           repository: dilapidated-shed/grease
-          run-id: 38206821183
+          run-id: 41253994123
+          artifact-ids: 13062637698
+          merge-multiple: true
           github-token: ${{ github.token }}
-          name: grease-alias-diagnostics-8bad10b21e0fe7fc93e851d705dc9b63dbf9d8fd
           path: grease-runtime
+      - name: Permit the pinned ASAN Grease runtime on the ephemeral host
+        run: sudo sysctl vm.mmap_rnd_bits=28
       - name: Verify pinned native Grease
         run: make -C android verify-grease GREASE=${{ github.workspace }}/grease-runtime/_bin/cxx-asan/ysh
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
