@@ -1,6 +1,7 @@
 #ifndef CGW_PRESENTATION_H
 #define CGW_PRESENTATION_H
 #include "cgw_capture.h"
+#define CGW_PRESENTATION_INTERFACE_VERSION 1u
 
 typedef struct cgw_presentation cgw_presentation;
 typedef enum { CGW_ROLE_USER, CGW_ROLE_ASSISTANT, CGW_ROLE_SYSTEM,
@@ -8,10 +9,10 @@ typedef enum { CGW_ROLE_USER, CGW_ROLE_ASSISTANT, CGW_ROLE_SYSTEM,
 typedef enum { CGW_PART_TEXT, CGW_PART_CODE, CGW_PART_ASSET,
     CGW_PART_UNSUPPORTED } cgw_presentation_kind;
 typedef struct {
-    char identity[257], node[257];
+    char identity[257], node[257], parent[257];
     cgw_presentation_role role;
     size_t parts;
-    int selected;
+    int selected, has_parent;
 } cgw_presentation_message;
 typedef struct {
     cgw_presentation_kind kind;
@@ -28,7 +29,15 @@ typedef struct {
 cgw_presentation *cgw_presentation_open(const char *root, const char *workspace,
     const char *conversation, cgw_capture_bounds bounds, char reason[80]);
 void cgw_presentation_close(cgw_presentation *view);
+unsigned cgw_presentation_interface_version(void);
 size_t cgw_presentation_messages(const cgw_presentation *view);
+/* Canonical inventory order is not conversation order. A proved selected path
+ * is derived from currentNodeId and actual parent links during worker-open.
+ * count returns 0 if the path is incomplete; it never invents a chronology.
+ * All branch messages remain inspectable through message_at. */
+int cgw_presentation_selected_count(const cgw_presentation *view, size_t *count);
+int cgw_presentation_selected_at(cgw_presentation *view, size_t position,
+    cgw_presentation_message *message);
 const char *cgw_presentation_source_sha256(const cgw_presentation *view);
 const char *cgw_presentation_inventory_sha256(const cgw_presentation *view);
 int cgw_presentation_message_at(cgw_presentation *view, size_t position,

@@ -23,3 +23,11 @@ No operation in this interface can acquire a network connection or send a prompt
 
 Tests use the exporter's explicitly synthetic offline capture corpus. They do
 not constitute a user archive import or live-account acceptance.
+
+The first adapter retained canonical all-branch inventory order but did not
+provide conversational order. The existing fixture places the assistant before
+the user in that inventory. The repaired interface caches a proved parent path
+and exposes user then assistant without dropping the alternate unknown-role
+branch. All graph traversal stays at worker-open, with constant-time cached
+message-position lookup. Independent expectations reject a producer that returns
+the path in reverse and one that reports an incompatible component version.

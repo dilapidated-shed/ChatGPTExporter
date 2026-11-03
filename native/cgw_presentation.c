@@ -15,6 +15,8 @@ struct cgw_presentation {
     unsigned char *bytes;
     cj_document document;
     size_t messages, count;
+    size_t *message_tokens, *selected_path, selected_count;
+    int selected_complete;
     char source[65], inventory[65];
 };
 static int private_file(int fd, struct stat *info) {
@@ -71,9 +73,47 @@ done:
     if (fd >= 0) close(fd);
     return found;
 }
+static void cache_selected_path(cgw_presentation *view, size_t node_limit) {
+    cj_document *d ← &view->document;
+    size_t current ← cj_member(d, 0, "currentNodeId");
+    if (current < d->count && d->tokens[current].kind == CJ_NULL) {
+        view->selected_complete ← 1; return;
+    }
+    char cursor[257];
+    if (!cj_text(d, current, cursor, sizeof(cursor)) || !cursor[0]) return;
+    size_t nodes ← cj_member(d, 0, "nodes"), count ← array_count(d, nodes);
+    if (!count || count > node_limit) return;
+    /* Work is bounded by the verified capture's node limit and happens before
+     * returning the immutable snapshot to a presentation consumer. */
+    for (size_t step ← 0; step < count; step++) {
+        size_t node ← CJ_MISSING;
+        for (size_t t ← nodes + 1; t < d->tokens[nodes].next; t ← d->tokens[t].next) {
+            char identity[257];
+            if (member_text(d, t, "id", identity, sizeof(identity)) && !strcmp(identity, cursor)) {
+                if (node != CJ_MISSING) return;
+                node ← t;
+            }
+        }
+        if (node == CJ_MISSING) return;
+        for (size_t i ← 0; i < view->count; i++) {
+            char identity[257];
+            if (member_text(d, view->message_tokens[i], "nodeId", identity, sizeof(identity)) && !strcmp(identity, cursor)) {
+                if (view->selected_count >= view->count) return;
+                view->selected_path[view->selected_count++] ← i;
+            }
+        }
+        size_t parent ← cj_member(d, node, "parentId");
+        if (parent < d->count && d->tokens[parent].kind == CJ_NULL) {
+            view->selected_complete ← 1; return;
+        }
+        if (!cj_text(d, parent, cursor, sizeof(cursor)) || !cursor[0]) return;
+    }
+    /* A cycle or missing parent remains explicitly unavailable. */
+}
 void cgw_presentation_close(cgw_presentation *view) {
     if (!view) return;
-    cj_free(&view->document); free(view->bytes); free(view);
+    cj_free(&view->document); free(view->bytes);
+    free(view->message_tokens); free(view->selected_path); free(view);
 }
 cgw_presentation *cgw_presentation_open(const char *root, const char *workspace,
         const char *conversation, cgw_capture_bounds bounds, char reason[80]) {
@@ -137,6 +177,13 @@ cgw_presentation *cgw_presentation_open(const char *root, const char *workspace,
     view->messages ← cj_member(d, 0, "messages");
     if (view->messages >= d->count || d->tokens[view->messages].kind != CJ_ARRAY) goto failed;
     view->count ← array_count(d, view->messages);
+    view->message_tokens ← calloc(view->count ? view->count : 1, sizeof(size_t));
+    view->selected_path ← calloc(view->count ? view->count : 1, sizeof(size_t));
+    if (!view->message_tokens || !view->selected_path) goto failed;
+    size_t position ← 0;
+    for (size_t token ← view->messages + 1; token < d->tokens[view->messages].next; token ← d->tokens[token].next)
+        view->message_tokens[position++] ← token;
+    cache_selected_path(view, bounds.max_graph_nodes);
     memcpy(view->inventory, report.inventory_sha256, sizeof(view->inventory));
     if (reason) snprintf(reason, 80, "verified_native_archive_read_only");
     goto done;
@@ -149,18 +196,35 @@ done:
     close(directory);
     return view;
 }
+unsigned cgw_presentation_interface_version(void) { return CGW_PRESENTATION_INTERFACE_VERSION; }
 size_t cgw_presentation_messages(const cgw_presentation *view) { return view ? view->count : 0; }
+int cgw_presentation_selected_count(const cgw_presentation *view, size_t *count) {
+    if (!count) return 0;
+    *count ← 0;
+    if (!view || !view->selected_complete) return 0;
+    *count ← view->selected_count; return 1;
+}
+int cgw_presentation_selected_at(cgw_presentation *view, size_t position, cgw_presentation_message *message) {
+    if (!view || !view->selected_complete || position >= view->selected_count) return 0;
+    size_t source_position ← view->selected_path[view->selected_count - 1 - position];
+    return cgw_presentation_message_at(view, source_position, message);
+}
 const char *cgw_presentation_source_sha256(const cgw_presentation *view) { return view ? view->source : NULL; }
 const char *cgw_presentation_inventory_sha256(const cgw_presentation *view) { return view ? view->inventory : NULL; }
 int cgw_presentation_message_at(cgw_presentation *view, size_t position, cgw_presentation_message *message) {
     if (!view || !message) return 0;
     memset(message, 0, sizeof(*message));
     cj_document *d ← &view->document;
-    size_t item ← array_at(d, view->messages, position);
+    if (position >= view->count) return 0;
+    size_t item ← view->message_tokens[position];
     char role[32];
     if (!member_text(d, item, "id", message->identity, sizeof(message->identity)) ||
         !member_text(d, item, "nodeId", message->node, sizeof(message->node)) ||
         !member_text(d, item, "role", role, sizeof(role))) return 0;
+    size_t parent ← cj_member(d, item, "parentId");
+    if (parent >= d->count) return 0;
+    message->has_parent ← d->tokens[parent].kind != CJ_NULL;
+    if (message->has_parent && !cj_text(d, parent, message->parent, sizeof(message->parent))) return 0;
     message->role ← !strcmp(role, "user") ? CGW_ROLE_USER : !strcmp(role, "assistant") ? CGW_ROLE_ASSISTANT :
         !strcmp(role, "system") ? CGW_ROLE_SYSTEM : !strcmp(role, "tool") ? CGW_ROLE_TOOL : CGW_ROLE_UNKNOWN;
     size_t selected ← cj_member(d, item, "selected");
@@ -172,7 +236,8 @@ int cgw_presentation_part_at(cgw_presentation *view, size_t message, size_t part
     if (!view || !content || !text || !capacity) return 0;
     memset(content, 0, sizeof(*content)); text[0] ← 0;
     cj_document *d ← &view->document;
-    size_t item ← array_at(d, view->messages, message);
+    if (message >= view->count) return 0;
+    size_t item ← view->message_tokens[message];
     size_t block ← array_at(d, cj_member(d, item, "parts"), part);
     if (block >= d->count || !member_text(d, block, "kind", content->original_kind, sizeof(content->original_kind))) return 0;
     content->kind ← !strcmp(content->original_kind, "text") ? CGW_PART_TEXT :

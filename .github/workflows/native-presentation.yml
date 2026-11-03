@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/ai-ci
-          ref: 38e1c96992cc32ac91d0105ae4d7fab7f6c267aa
+          ref: 851cd4a40da4f8311bd22af9ce6b4a57be2c2c65
           path: independent-presentation
           persist-credentials: false
       - name: Qualified native ICK frontend
