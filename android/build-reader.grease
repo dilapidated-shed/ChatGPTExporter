@@ -23,7 +23,7 @@ if (abi === 'x86_64') {
 } elif (abi !== 'arm64-v8a') { echo 'unsupported reader ABI' >&2; exit 2 }
 test -x "$compiler"
 test $("$compiler" -dumpmachine) = "$expected"
-test $(git -C "$shared" rev-parse HEAD) = b2ee19121aa3fa1112cd8338b7b6a7baca237b5f
+test $(git -C "$shared" rev-parse HEAD) = 3e682fb1175beef5625dbd2418730220e49fc9bd
 var host = "$ndk/toolchains/llvm/prebuilt/linux-x86_64"
 var sysroot = "$host/sysroot"
 var builtin = $("$compiler" -print-file-name=include)

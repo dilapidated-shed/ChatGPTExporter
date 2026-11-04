@@ -244,6 +244,7 @@ static int deliver(int fd, int events, void *unused) {
 int cgw_reader_active(void) { return reader.work != NULL; }
 void cgw_reader_unavailable(JNIEnv *e, jobject activity) {
     M3Theme theme ← m3_theme(e, activity);
+    m3_window(e, activity, theme);
     jobject text ← m3_new(e, activity, "android/widget/TextView");
     jstring label ← (*e)->NewStringUTF(e,
         "Saved archive reader unavailable. A previous verification may still be finishing. Use Back, then reopen the saved archive.");
@@ -305,6 +306,7 @@ int cgw_reader_open(JNIEnv *e, jobject activity, const char *root,
     w->bounds ← bounds; w->pending ← 1; w->revision ← 1;
     (*e)->GetJavaVM(e, &w->vm);
     M3Theme theme ← m3_theme(e, activity);
+    m3_window(e, activity, theme);
     jobject column ← m3_column(e, activity), heading ← m3_new(e, activity, "android/widget/TextView");
     jobject body ← m3_new(e, activity, "android/widget/TextView"), scroll ← m3_new(e, activity, "android/widget/ScrollView");
     (*e)->CallVoidMethod(e, column, m3_method(e, column, "setBackgroundColor", "(I)V"), theme.surface);
