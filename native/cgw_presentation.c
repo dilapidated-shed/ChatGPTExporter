@@ -229,8 +229,18 @@ int cgw_presentation_title(cgw_presentation *view, char *text, size_t capacity, 
 int cgw_presentation_role_text(cgw_presentation *view, size_t position,
         char *text, size_t capacity, size_t *bytes) {
     if (!view || !text || !capacity || !bytes || position >= view->count) return 0;
-    return cj_text_bytes(&view->document,
-        cj_member(&view->document, view->message_tokens[position], "role"), text, capacity, bytes);
+    cj_document *d ← &view->document;
+    size_t message ← view->message_tokens[position];
+    size_t role ← cj_member(d, message, "role");
+    char normalized[32];
+    if (cj_text(d, role, normalized, sizeof(normalized)) && !strcmp(normalized, "unknown")) {
+        size_t extensions ← cj_member(d, message, "extensions");
+        size_t provider ← cj_member(d, extensions, "chatgpt");
+        size_t author ← cj_member(d, provider, "author");
+        size_t original ← cj_member(d, author, "role");
+        if (original < d->count && d->tokens[original].kind == CJ_STRING) role ← original;
+    }
+    return cj_text_bytes(d, role, text, capacity, bytes);
 }
 unsigned cgw_presentation_interface_version(void) { return CGW_PRESENTATION_INTERFACE_VERSION; }
 size_t cgw_presentation_messages(const cgw_presentation *view) { return view ? view->count : 0; }

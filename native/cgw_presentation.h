@@ -34,6 +34,7 @@ cgw_presentation *cgw_presentation_open_position(const char *root, const char *w
     size_t position, cgw_capture_bounds bounds, size_t *conversations, char reason[80]);
 const char *cgw_presentation_conversation_id(const cgw_presentation *view);
 int cgw_presentation_title(cgw_presentation *view, char *text, size_t capacity, size_t *bytes);
+/* Original provider role for normalized "unknown"; canonical role otherwise. */
 int cgw_presentation_role_text(cgw_presentation *view, size_t position,
     char *text, size_t capacity, size_t *bytes);
 void cgw_presentation_close(cgw_presentation *view);

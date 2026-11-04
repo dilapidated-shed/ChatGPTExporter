@@ -95,7 +95,7 @@ build/arm64-unsigned.apk: build/lib/arm64-v8a/libcgw_webview.so AndroidManifest.
 	test -f "$(DEX_DIR)/classes2.dex"
 	test -f "$(DEX_DIR)/classes3.dex"
 	test -f "$(DEX_DIR)/classes4.dex"
-	"$(BUILD_TOOLS)/aapt2" link -I "$(ANDROID_JAR)" --manifest AndroidManifest.xml --version-code 4 --version-name 0.3-views-candidate -o build/manifest.apk
+	"$(BUILD_TOOLS)/aapt2" link -I "$(ANDROID_JAR)" --manifest AndroidManifest.xml --version-code 5 --version-name 0.4-native-reader-candidate -o build/manifest.apk
 	cp build/manifest.apk $@
 	cp "$(DEX_DIR)"/classes*.dex build/
 	mkdir -p build/package-arm64/lib/arm64-v8a build/package-arm64/assets
@@ -114,6 +114,21 @@ build/fixture-unsigned.apk: build/fixture/lib/x86_64/libcgw_webview.so AndroidMa
 	cp assets/bridge.js build/package-fixture/assets/
 	TZ=UTC touch -t 198001010000 build/package-fixture/classes*.dex build/package-fixture/lib/x86_64/libcgw_webview.so build/package-fixture/assets/bridge.js
 	cd build/package-fixture && TZ=UTC zip -X -D -q ../fixture-unsigned.apk classes.dex classes2.dex classes3.dex classes4.dex lib/x86_64/libcgw_webview.so assets/bridge.js
+
+build/production-reader-unsigned.apk: build/fixture-unsigned.apk build/production/lib/x86_64/libcgw_webview.so
+	cp build/fixture-unsigned.apk $@
+	mkdir -p build/package-production-reader/lib/x86_64
+	cp build/production/lib/x86_64/libcgw_webview.so build/package-production-reader/lib/x86_64/
+	TZ=UTC touch -t 198001010000 build/package-production-reader/lib/x86_64/libcgw_webview.so
+	cd build/package-production-reader && TZ=UTC zip -X -D -q ../production-reader-unsigned.apk lib/x86_64/libcgw_webview.so
+
+.PHONY: production-reader
+production-reader: build/production-reader-unsigned.apk
+	"$(BUILD_TOOLS)/zipalign" -P 16 -f 4 build/production-reader-unsigned.apk build/production-reader-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" sign --ks "$(KEYSTORE)" --ks-type PKCS12 --ks-pass pass:wegert-debug --key-pass pass:wegert-debug --ks-key-alias wegert-debug --out build/production-reader.apk build/production-reader-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" verify --verbose --print-certs build/production-reader.apk > build/production-reader-signature.txt
+	grep -q 'certificate SHA-256 digest: de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9' build/production-reader-signature.txt
+	sha256sum build/production-reader.apk build/production/lib/x86_64/libcgw_webview.so > build/production-reader.sha256
 
 fixture: build/fixture-unsigned.apk
 	test -f "$(KEYSTORE)"
