@@ -18,6 +18,13 @@ assembler or generated C produces these DEX classes. All native methods have
 no DEX implementation body. The fourth class is application-owned metadata,
 using the maintained generic encoder rather than another DEX writer.
 
+The native reader adds a real `onClick(View)` callback and implements the
+framework `View.OnClickListener` interface through the shared checked writer
+at `b2ee19121aa3fa1112cd8338b7b6a7baca237b5f`. The other three retained
+callback plans use its compatibility facade. This revision replaces the old
+950f producer pin; it is not a second writer. The frontend is the FastChat-
+qualified Idriç revision `ff4d852862a3942592f8ade9afde8d409d9803be`.
+
 Acceptance: compile the actual Idriç source, emit twice and compare bytes,
 independently inspect all DEX units, then exercise Handler and Activity callbacks
 in installed Android. A source declaration or host structural check alone

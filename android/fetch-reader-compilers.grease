@@ -1,0 +1,39 @@
+#!/usr/bin/env grease
+set -eu -o pipefail
+if (len(ARGV) !== 5) { echo 'requires REPOSITORY AICI ICK_SOURCE NDK NEW_OUTPUT' >&2; exit 2 }
+var repository = ARGV[0]
+var aici = ARGV[1]
+var source = ARGV[2]
+var ndk = ARGV[3]
+var output = ARGV[4]
+test ! -e "$output"
+test $(git -C "$aici" rev-parse HEAD) = 6cfacc591b5e6b187547b4409e976772f319c28b
+test $(git -C "$source" rev-parse HEAD) = fbe86e23d55cfec2000c08e61deea2a407fd7175
+mkdir -p "$output/archives"
+for abi in arm64-v8a x86_64 {
+  # Same immutable ICK stages already consumed by the qualified IB reader.
+  # They are requalified here against this app's NDK29 before use. They are
+  # never relabelled as a different compiler/configuration cache profile.
+  var artifact = '12240678290'
+  var digest = '16525b18ca3cb38848be6f6ea35527eee218e52a0934a4719c7fda6a3332edd7'
+  if (abi === 'x86_64') {
+    setvar artifact = '12240692135'
+    setvar digest = '9fdd4788b872f355545ad177a825fd9aa99f04bddc07d1615efeb9348652f3ac'
+  }
+  var producer = $(gh api "repos/isomorphisms/ai-ci/actions/artifacts/$artifact" --jq '.workflow_run.head_sha')
+  test "$producer" = 82cc8716b3feb05a05e5aa7fa0bac7b4db40f8c6
+  gh api "repos/isomorphisms/ai-ci/actions/artifacts/$artifact/zip" > "$output/archives/$abi.zip"
+  printf '%s  %s\n' "$digest" "$output/archives/$abi.zip" | sha256sum -c -
+  mkdir -p "$output/archives/$abi" "$output/$abi"
+  unzip -q "$output/archives/$abi.zip" -d "$output/archives/$abi"
+  tar --no-same-owner -xzf "$output/archives/$abi/ick-android-$abi-stage.tar.gz" -C "$output/$abi"
+  rg -x -F b'source\tfbe86e23d55cfec2000c08e61deea2a407fd7175' "$output/$abi/qualification/receipt.tsv"
+  mkdir -p "$repository/android/build/compiler-$abi"
+  cp "$output/$abi/qualification/receipt.tsv" "$repository/android/build/compiler-$abi/original-receipt.tsv"
+  make -f "$aici/ick-android/Makefile" qualify "ABI=$abi" "NDK=$ndk" \
+    "ICK_SOURCE=$source" "ICK_STAGE=$output/$abi" \
+    "QUALIFY_BUILD=$repository/android/build/compiler-$abi/qualification"
+  printf 'producer\t%s\nartifact\t%s\narchive_sha256\t%s\nsource\t%s\n' \
+    "$producer" "$artifact" "$digest" fbe86e23d55cfec2000c08e61deea2a407fd7175 \
+    > "$repository/android/build/compiler-$abi/input.tsv"
+}

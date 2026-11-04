@@ -11,6 +11,11 @@ DEX_SOURCE ?=
 KEYSTORE ?=
 CERT_SHA256 ?=
 ANDROID_NDK ?=
+NDK ?=
+ICK_ARM64 ?=
+ICK_X86_64 ?=
+GREASE ?=
+PRESENTATION_REPOSITORY ?=
 IDRIC ?=
 IDRIC_RUNTIME_LIBRARY ?= $(dir $(IDRIC))idris2_app/libidris2_support.so
 SOURCE_COMMIT ?= $(shell git rev-parse HEAD)
@@ -67,22 +72,30 @@ verify-dex:
 	test -n "$(DEX_SOURCE)"
 	grep -qx "$(DEX_SOURCE)" "$(DEX_DIR)/source-commit.txt"
 
-build/lib/arm64-v8a/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS)
+build/lib/arm64-v8a/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS) cgw_reader.c cgw_reader.h ../native/cgw_presentation.c ../native/cgw_presentation.h build-reader.grease
 	test -x "$(CC_ARM64)"
 	mkdir -p build/lib/arm64-v8a
-	"$(CC_ARM64)" $(FLAGS) $(NATIVE) -llog -o $@
+	"$(GREASE)" build-reader.grease "$(ICK_ARM64)" "$(NDK)" arm64-v8a "$(abspath ..)" "$(PRESENTATION_REPOSITORY)" "$(abspath build/reader/arm64-v8a)"
+	"$(CC_ARM64)" $(FLAGS) $(NATIVE) build/reader/arm64-v8a/cgw_presentation.o build/reader/arm64-v8a/cgw_reader.o -llog -landroid -o $@
 
-build/fixture/lib/x86_64/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS)
+build/fixture/lib/x86_64/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS) cgw_reader.c cgw_reader.h ../native/cgw_presentation.c ../native/cgw_presentation.h build-reader.grease
 	test -x "$(CC_X86_64)"
 	mkdir -p build/fixture/lib/x86_64
-	"$(CC_X86_64)" $(FLAGS) -DCGW_WEBVIEW_SYNTHETIC $(NATIVE) -llog -o $@
+	"$(GREASE)" build-reader.grease "$(ICK_X86_64)" "$(NDK)" x86_64 "$(abspath ..)" "$(PRESENTATION_REPOSITORY)" "$(abspath build/reader/x86_64)"
+	"$(CC_X86_64)" $(FLAGS) -DCGW_WEBVIEW_SYNTHETIC $(NATIVE) build/reader/x86_64/cgw_presentation.o build/reader/x86_64/cgw_reader.o -llog -landroid -o $@
+
+# The production x86 payload has no synthetic transport. It is installed over
+# the fixture with the same package/signer/UID for independent offline reading.
+build/production/lib/x86_64/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS) build/fixture/lib/x86_64/libcgw_webview.so
+	mkdir -p build/production/lib/x86_64
+	"$(CC_X86_64)" $(FLAGS) $(NATIVE) build/reader/x86_64/cgw_presentation.o build/reader/x86_64/cgw_reader.o -llog -landroid -o $@
 
 build/arm64-unsigned.apk: build/lib/arm64-v8a/libcgw_webview.so AndroidManifest.xml assets/bridge.js
 	test -f "$(DEX_DIR)/classes.dex"
 	test -f "$(DEX_DIR)/classes2.dex"
 	test -f "$(DEX_DIR)/classes3.dex"
 	test -f "$(DEX_DIR)/classes4.dex"
-	"$(BUILD_TOOLS)/aapt2" link -I "$(ANDROID_JAR)" --manifest AndroidManifest.xml --version-code 4 --version-name 0.3-views-candidate -o build/manifest.apk
+	"$(BUILD_TOOLS)/aapt2" link -I "$(ANDROID_JAR)" --manifest AndroidManifest.xml --version-code 5 --version-name 0.4-native-reader-candidate -o build/manifest.apk
 	cp build/manifest.apk $@
 	cp "$(DEX_DIR)"/classes*.dex build/
 	mkdir -p build/package-arm64/lib/arm64-v8a build/package-arm64/assets
@@ -101,6 +114,41 @@ build/fixture-unsigned.apk: build/fixture/lib/x86_64/libcgw_webview.so AndroidMa
 	cp assets/bridge.js build/package-fixture/assets/
 	TZ=UTC touch -t 198001010000 build/package-fixture/classes*.dex build/package-fixture/lib/x86_64/libcgw_webview.so build/package-fixture/assets/bridge.js
 	cd build/package-fixture && TZ=UTC zip -X -D -q ../fixture-unsigned.apk classes.dex classes2.dex classes3.dex classes4.dex lib/x86_64/libcgw_webview.so assets/bridge.js
+
+build/production-reader-unsigned.apk: build/fixture-unsigned.apk build/production/lib/x86_64/libcgw_webview.so
+	cp build/fixture-unsigned.apk $@
+	mkdir -p build/package-production-reader/lib/x86_64
+	cp build/production/lib/x86_64/libcgw_webview.so build/package-production-reader/lib/x86_64/
+	TZ=UTC touch -t 198001010000 build/package-production-reader/lib/x86_64/libcgw_webview.so
+	cd build/package-production-reader && TZ=UTC zip -X -D -q ../production-reader-unsigned.apk lib/x86_64/libcgw_webview.so
+
+.PHONY: production-reader
+production-reader: build/production-reader-unsigned.apk
+	"$(BUILD_TOOLS)/zipalign" -P 16 -f 4 build/production-reader-unsigned.apk build/production-reader-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" sign --ks "$(KEYSTORE)" --ks-type PKCS12 --ks-pass pass:wegert-debug --key-pass pass:wegert-debug --ks-key-alias wegert-debug --out build/production-reader.apk build/production-reader-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" verify --verbose --print-certs build/production-reader.apk > build/production-reader-signature.txt
+	grep -q 'certificate SHA-256 digest: de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9' build/production-reader-signature.txt
+	sha256sum build/production-reader.apk build/production/lib/x86_64/libcgw_webview.so > build/production-reader.sha256
+
+# Independent observer must reject this actual compiled control-admission
+# mutation. It retains the real archive/controller and changes one guard only.
+build/control-mutant/lib/x86_64/libcgw_webview.so: $(NATIVE) cgw_reader.c cgw_reader.h ../native/cgw_presentation.c build-reader.grease
+	mkdir -p build/control-mutant/lib/x86_64
+	sed '/reader.controls\[id - CONTROL_FIRST\]/d' cgw_reader.c > build/control-mutant/reader.c
+	! cmp -s cgw_reader.c build/control-mutant/reader.c
+	"$(GREASE)" build-reader.grease "$(ICK_X86_64)" "$(NDK)" x86_64 "$(abspath ..)" "$(PRESENTATION_REPOSITORY)" "$(abspath build/control-mutant/stage)" "$(abspath build/control-mutant/reader.c)"
+	"$(CC_X86_64)" $(FLAGS) $(NATIVE) build/control-mutant/stage/cgw_presentation.o build/control-mutant/stage/cgw_reader.o -llog -landroid -o $@
+
+build/control-mutant-unsigned.apk: build/production-reader-unsigned.apk build/control-mutant/lib/x86_64/libcgw_webview.so
+	cp build/production-reader-unsigned.apk $@
+	cd build/control-mutant && TZ=UTC zip -X -D -q ../control-mutant-unsigned.apk lib/x86_64/libcgw_webview.so
+
+.PHONY: control-mutant
+control-mutant: build/control-mutant-unsigned.apk
+	"$(BUILD_TOOLS)/zipalign" -P 16 -f 4 build/control-mutant-unsigned.apk build/control-mutant-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" sign --ks "$(KEYSTORE)" --ks-type PKCS12 --ks-pass pass:wegert-debug --key-pass pass:wegert-debug --ks-key-alias wegert-debug --out build/control-mutant.apk build/control-mutant-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" verify --verbose --print-certs build/control-mutant.apk > build/control-mutant-signature.txt
+	sha256sum build/control-mutant.apk build/control-mutant/lib/x86_64/libcgw_webview.so build/control-mutant/reader.c > build/control-mutant.sha256
 
 fixture: build/fixture-unsigned.apk
 	test -f "$(KEYSTORE)"

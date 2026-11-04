@@ -16,6 +16,7 @@
 #include "cgw_json.h"
 #include "cgw_sha256.h"
 #include "cgw_webview_bridge.h"
+#include "cgw_reader.h"
 
 #define ACTIVITY "org/isomorphisms/webview/BridgeActivity"
 #define CLIENT "org/isomorphisms/webview/BridgeClient"
@@ -29,6 +30,7 @@ static pthread_mutex_t platform_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t platform_changed = PTHREAD_COND_INITIALIZER;
 static JavaVM *java_vm;
 static jobject workspace_view, ui_handler, ui_task, export_tree;
+static jobject capture_root;
 static pthread_t archive_worker;
 static int worker_joinable, capture_running, capture_paused, capture_stopped;
 static int request_waiting, dispatch_pending, worker_action;
@@ -49,6 +51,8 @@ static void archive_choose_destination(JNIEnv *);
 static void archive_activity_result(JNIEnv *, jint, jint, jobject);
 static void archive_ui_run(JNIEnv *);
 static void archive_shutdown(JNIEnv *);
+static cgw_capture_bounds android_bounds(void);
+static void reader_close(JNIEnv *);
 static jobject context_view(JNIEnv *, const char *);
 #ifdef CGW_WEBVIEW_SYNTHETIC
 #include <stdatomic.h>
@@ -74,6 +78,30 @@ static jobject construct(JNIEnv *env, const char *name)
     jobject object = init ? (*env)->NewObject(env, cls, init) : NULL;
     (*env)->DeleteLocalRef(env, cls);
     return object;
+}
+
+static int read_saved_entry(JNIEnv *env, jobject intent)
+{
+    jmethodID get = method(env, intent, "getAction", "()Ljava/lang/String;");
+    jstring action = get ? (*env)->CallObjectMethod(env, intent, get) : NULL;
+    const char *value = action ? (*env)->GetStringUTFChars(env, action, NULL) : NULL;
+    int result = value && !strcmp(value, "org.isomorphisms.chatgptexporter.READ_SAVED");
+    if (value) (*env)->ReleaseStringUTFChars(env, action, value);
+    if (action) (*env)->DeleteLocalRef(env, action);
+    return result;
+}
+
+static void remember_entry(JNIEnv *env, jobject self, const char *action)
+{
+    jmethodID get = method(env, self, "getIntent", "()Landroid/content/Intent;");
+    jobject intent = get ? (*env)->CallObjectMethod(env, self, get) : NULL;
+    jmethodID set_action = method(env, intent, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
+    jstring value = (*env)->NewStringUTF(env, action);
+    if (set_action && value) (*env)->CallObjectMethod(env, intent, set_action, value);
+    jmethodID set = method(env, self, "setIntent", "(Landroid/content/Intent;)V");
+    if (intent && set) (*env)->CallVoidMethod(env, self, set, intent);
+    if (value) (*env)->DeleteLocalRef(env, value);
+    if (intent) (*env)->DeleteLocalRef(env, intent);
 }
 
 static int entropy(void *context, unsigned char *bytes, size_t length)
@@ -493,13 +521,14 @@ static jobject intercept(JNIEnv *env, jobject self, jobject view, jobject reques
 static jboolean create_menu(JNIEnv *env, jobject self, jobject menu)
 {
     (void)self;
+    if (cgw_reader_active()) return JNI_FALSE;
     jmethodID add = method(env, menu, "add", "(IIILjava/lang/CharSequence;)Landroid/view/MenuItem;");
     jstring title = (*env)->NewStringUTF(env, "Check session");
     if (!add || !title) return JNI_FALSE;
     jobject item = (*env)->CallObjectMethod(env, menu, add, 0, 1, 0, title);
     jmethodID show = method(env, item, "setShowAsAction", "(I)V");
     if (show) (*env)->CallVoidMethod(env, item, show, 6); /* ALWAYS | WITH_TEXT */
-    const char *actions[] = { "Capture / resume", "Pause / continue", "Cancel capture", "Validate saved archive", "Copy archive to folder" };
+    const char *actions[] = { "Capture / resume", "Pause / continue", "Cancel capture", "Validate saved archive", "Copy archive to folder", "Read saved conversations" };
     for (unsigned i = 0; i < sizeof(actions) / sizeof(actions[0]); ++i) {
         jstring label = (*env)->NewStringUTF(env, actions[i]);
         (*env)->CallObjectMethod(env, menu, add, 0, (jint)i + 2, (jint)i + 1, label);
@@ -511,6 +540,7 @@ static jboolean create_menu(JNIEnv *env, jobject self, jobject menu)
 static jboolean select_menu(JNIEnv *env, jobject self, jobject item)
 {
     (void)self;
+    if (cgw_reader_active()) return JNI_FALSE;
     jmethodID get = method(env, item, "getItemId", "()I");
     jint id = get ? (*env)->CallIntMethod(env, item, get) : 0;
     if (id == 1) { probe(env); return JNI_TRUE; }
@@ -528,11 +558,19 @@ static jboolean select_menu(JNIEnv *env, jobject self, jobject item)
     }
     if (id == 5) { archive_start(env, 2); return JNI_TRUE; }
     if (id == 6) { archive_choose_destination(env); return JNI_TRUE; }
+    if (id == 7) {
+        if (capture_running) show_status(env, "Finish the archive operation before reading saved content");
+        else if (!cgw_reader_open(env, activity, archive_root, selected_workspace, android_bounds()))
+            show_status(env, "Saved archive reader unavailable");
+        else remember_entry(env, activity, "org.isomorphisms.chatgptexporter.READ_SAVED");
+        return JNI_TRUE;
+    }
     return JNI_FALSE;
 }
 
 static void on_back(JNIEnv *env, jobject self)
 {
+    if (cgw_reader_active()) { reader_close(env); return; }
     jmethodID can = method(env, webview, "canGoBack", "()Z");
     if (can && (*env)->CallBooleanMethod(env, webview, can)) {
         revoke(env);
@@ -585,6 +623,7 @@ static int install_controls(JNIEnv *env, jobject view)
     if (title_visible) (*env)->CallVoidMethod(env, bar, title_visible, JNI_FALSE);
     status_view = (*env)->NewGlobalRef(env, status);
     workspace_view = (*env)->NewGlobalRef(env, selection);
+    capture_root = (*env)->NewGlobalRef(env, column);
     show_status(env, "Page loading - session check not ready");
     return !(*env)->ExceptionCheck(env);
 }
@@ -598,6 +637,18 @@ static void on_create(JNIEnv *env, jobject self, jobject bundle)
     if ((*env)->ExceptionCheck(env)) return;
     if (activity) { report("lifecycle:duplicate_activity_refused"); return; }
     activity = (*env)->NewGlobalRef(env, self);
+    jmethodID get_intent_action = method(env, self, "getIntent", "()Landroid/content/Intent;");
+    jobject entry = get_intent_action ? (*env)->CallObjectMethod(env, self, get_intent_action) : NULL;
+    int read_saved = read_saved_entry(env, entry);
+    if (read_saved) {
+        /* The read-only entry restores only existing private archive selection.
+         * It constructs neither WebView nor bridge, and cannot acquire/send. */
+        if (!archive_initialize(env) || !cgw_reader_open(env, self, archive_root, selected_workspace, android_bounds())) {
+            report("reader:entry_unavailable");
+            if (!(*env)->ExceptionCheck(env)) cgw_reader_unavailable(env, self);
+        }
+        return;
+    }
     cgw_webview_bridge_config config = { .entropy = entropy, .response_cap_bytes = 5000000 };
     bridge = cgw_webview_bridge_open(&config);
     if (!bridge) return;
@@ -642,9 +693,29 @@ static void on_create(JNIEnv *env, jobject self, jobject bundle)
     if (!(*env)->ExceptionCheck(env)) report("shell:interactive_sign_in_ready");
 }
 
+static void on_new_intent(JNIEnv *env, jobject self, jobject intent)
+{
+    jclass base = (*env)->FindClass(env, "android/app/Activity");
+    jmethodID super = base ? (*env)->GetMethodID(env, base, "onNewIntent", "(Landroid/content/Intent;)V") : NULL;
+    if (!super) return;
+    (*env)->CallNonvirtualVoidMethod(env, self, base, super, intent);
+    if ((*env)->ExceptionCheck(env) || !read_saved_entry(env, intent)) return;
+    if (!cgw_reader_active()) {
+        if (capture_running) { show_status(env, "Finish the archive operation before reading saved content"); return; }
+        if (!cgw_reader_open(env, self, archive_root, selected_workspace, android_bounds())) {
+            show_status(env, "Saved archive reader unavailable"); return;
+        }
+    }
+    /* singleTask delivers a hot import as onNewIntent, not onCreate. Retain
+     * its read-only entry for recreation; do not create/reload acquisition. */
+    jmethodID set = method(env, self, "setIntent", "(Landroid/content/Intent;)V");
+    if (set) (*env)->CallVoidMethod(env, self, set, intent);
+}
+
 static void on_destroy(JNIEnv *env, jobject self)
 {
     if (activity && (*env)->IsSameObject(env, activity, self)) {
+        cgw_reader_close(env);
         revoke(env);
         if (webview) {
             jclass layout = (*env)->FindClass(env, "android/widget/FrameLayout");
@@ -658,6 +729,7 @@ static void on_destroy(JNIEnv *env, jobject self)
         }
         if (status_view) { (*env)->DeleteGlobalRef(env, status_view); status_view = NULL; }
         if (workspace_view) { (*env)->DeleteGlobalRef(env, workspace_view); workspace_view = NULL; }
+        if (capture_root) { (*env)->DeleteGlobalRef(env, capture_root); capture_root = NULL; }
         if (ui_task) { (*env)->DeleteGlobalRef(env, ui_task); ui_task = NULL; }
         if (ui_handler) { (*env)->DeleteGlobalRef(env, ui_handler); ui_handler = NULL; }
         if (export_tree) { (*env)->DeleteGlobalRef(env, export_tree); export_tree = NULL; }
@@ -671,14 +743,33 @@ static void on_destroy(JNIEnv *env, jobject self)
 
 #include "cgw_capture_android.inc"
 
+static void reader_close(JNIEnv *env)
+{
+    cgw_reader_close(env);
+    if (capture_root) {
+        remember_entry(env, activity, "android.intent.action.MAIN");
+        jmethodID content = method(env, activity, "setContentView", "(Landroid/view/View;)V");
+        if (content) (*env)->CallVoidMethod(env, activity, content, capture_root);
+        jmethodID invalidate = method(env, activity, "invalidateOptionsMenu", "()V");
+        if (invalidate) (*env)->CallVoidMethod(env, activity, invalidate);
+    } else {
+        jmethodID finish = method(env, activity, "finish", "()V");
+        if (finish) (*env)->CallVoidMethod(env, activity, finish);
+    }
+}
+
 /* Conventional JNI symbol resolution avoids initializing the other DEX
  * classes recursively while Activity.<clinit> is loading this library. */
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onCreate
 (JNIEnv *e, jobject s, jobject b) { on_create(e,s,b); }
+JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onNewIntent
+(JNIEnv *e, jobject s, jobject i) { pthread_mutex_lock(&platform_mutex); on_new_intent(e,s,i); pthread_mutex_unlock(&platform_mutex); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onDestroy
 (JNIEnv *e, jobject s) { archive_shutdown(e); on_destroy(e,s); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onBackPressed
 (JNIEnv *e, jobject s) { pthread_mutex_lock(&platform_mutex); on_back(e,s); pthread_mutex_unlock(&platform_mutex); }
+JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onClick
+(JNIEnv *e, jobject s, jobject v) { if (activity && (*e)->IsSameObject(e,s,activity) && cgw_reader_click(e,v) == -1) reader_close(e); }
 JNIEXPORT jboolean JNICALL Java_org_isomorphisms_webview_BridgeActivity_onCreateOptionsMenu
 (JNIEnv *e, jobject s, jobject m) { return create_menu(e,s,m); }
 JNIEXPORT jboolean JNICALL Java_org_isomorphisms_webview_BridgeActivity_onOptionsItemSelected

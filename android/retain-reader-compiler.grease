@@ -1,0 +1,29 @@
+#!/usr/bin/env grease
+set -eu -o pipefail
+if (len(ARGV) !== 3) { echo 'requires REPOSITORY ABI QUALIFIED_COMPILER' >&2; exit 2 }
+var repository = ARGV[0]
+var abi = ARGV[1]
+var compiler = ARGV[2]
+var expected = 'aarch64-linux-gnu'
+if (abi === 'x86_64') { setvar expected = 'x86_64-linux-gnu' } elif (abi !== 'arm64-v8a') { exit 2 }
+var temporary = ENV.RUNNER_TEMP
+test -n "$temporary"
+test $(realpath "$temporary") = "$temporary"
+test "$compiler" = "$temporary/ick-android-$abi-stage/bin/$expected-gcc"
+test -x "$compiler"
+test $("$compiler" -dumpmachine) = "$expected"
+var frontend = $("$compiler" -print-prog-name=cc1)
+test -x "$frontend"
+mkdir -p "$repository/android/build/compiler-$abi"
+var receipt = "$repository/android/build/compiler-$abi/qualified-stage.sha256"
+sha256sum "$compiler" "$frontend" > "$receipt"
+# The immutable qualified stage has already been saved before this call. Only
+# this job's disposable compiler build is pruned, never source or runtime data.
+var build = "$temporary/ick-android-$abi-build"
+if test -d "$build" {
+  test $(realpath "$build") = "$build"
+  rm -rf -- "$build"
+}
+sha256sum -c "$receipt"
+test $("$compiler" -dumpmachine) = "$expected"
+df -Pk "$temporary" > "$repository/android/build/compiler-$abi/capacity.txt"

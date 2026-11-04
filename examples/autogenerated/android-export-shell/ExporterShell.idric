@@ -2,30 +2,38 @@ module ExporterShell
 
 import Backend.DEX.Encode
 import Backend.DEX.EncodeCallbackShell
+import Backend.DEX.FrameworkClasses as Framework
 import System
 
 %default covering
 
-emit : String -> String -> String -> List NativeCallback -> IO ()
+emit : String → String → String → List Backend.DEX.EncodeCallbackShell.NativeCallback → IO ()
 emit filename name parent callbacks =
   case encode_callback_shell ("Lorg/isomorphisms/webview/" ++ name ++ ";")
                             parent "cgw_webview" callbacks of
-    Left error => do putStrLn error; exitFailure
-    Right bytes => do
-      result <- write_dex ("build/direct-dex/" ++ filename) bytes
+    Left error ⇒ do putStrLn error; exitFailure
+    Right bytes ⇒ do
+      result ← write_dex ("build/direct-dex/" ++ filename) bytes
       case result of
-        Left error => do putStrLn error; exitFailure
-        Right () => putStrLn ("PASS direct DEX " ++ filename)
+        Left error ⇒ do putStrLn error; exitFailure
+        Right () ⇒ putStrLn ("PASS direct DEX " ++ filename)
 
 main : IO ()
 main = do
-  emit "classes.dex" "BridgeActivity" "Landroid/app/Activity;"
-    [ MkNativeCallback "onCreate" "V" ["Landroid/os/Bundle;"]
-    , MkNativeCallback "onDestroy" "V" []
-    , MkNativeCallback "onBackPressed" "V" []
-    , MkNativeCallback "onCreateOptionsMenu" "Z" ["Landroid/view/Menu;"]
-    , MkNativeCallback "onOptionsItemSelected" "Z" ["Landroid/view/MenuItem;"]
-    , MkNativeCallback "onActivityResult" "V" ["I", "I", "Landroid/content/Intent;"] ]
+  result ← Framework.write_framework_classes_implementing
+    [(Framework.Subclass "Lorg/isomorphisms/webview/BridgeActivity;" "Landroid/app/Activity;" (Just "cgw_webview")
+      [ Framework.Callback "onCreate" "V" ["Landroid/os/Bundle;"]
+      , Framework.Callback "onNewIntent" "V" ["Landroid/content/Intent;"]
+      , Framework.Callback "onDestroy" "V" []
+      , Framework.Callback "onBackPressed" "V" []
+      , Framework.Callback "onClick" "V" ["Landroid/view/View;"]
+      , Framework.Callback "onCreateOptionsMenu" "Z" ["Landroid/view/Menu;"]
+      , Framework.Callback "onOptionsItemSelected" "Z" ["Landroid/view/MenuItem;"]
+      , Framework.Callback "onActivityResult" "V" ["I", "I", "Landroid/content/Intent;"] ],
+      ["Landroid/view/View$OnClickListener;"])] "build/direct-dex/classes.dex"
+  case result of
+    Left error ⇒ do putStrLn error; exitFailure
+    Right () ⇒ putStrLn "PASS direct DEX typed Activity click callback"
   emit "classes2.dex" "BridgeClient" "Landroid/webkit/WebViewClient;"
     [ MkNativeCallback "onPageStarted" "V" ["Landroid/webkit/WebView;", "Ljava/lang/String;", "Landroid/graphics/Bitmap;"]
     , MkNativeCallback "onPageCommitVisible" "V" ["Landroid/webkit/WebView;", "Ljava/lang/String;"]
