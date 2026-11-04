@@ -21,13 +21,13 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/android-NDK
-          ref: 950fef409148e91fc3ed59b0fbf64368f1ad0438
+          ref: b2ee19121aa3fa1112cd8338b7b6a7baca237b5f
           path: callback-producer
           persist-credentials: false
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/Idric
-          ref: e8b9173ab2d840ef0cf212698ea2fee97bd9e807
+          ref: ff4d852862a3942592f8ade9afde8d409d9803be
           path: compiler
           persist-credentials: false
       - uses: actions/cache/restore@v4
@@ -36,7 +36,7 @@ jobs:
           path: |
             compiler/_
             ~/.idris2
-          key: exporter-idric-e8b9173ab-ubuntu24-v1
+          key: exporter-idric-ff4d852862-ubuntu24-v1
       - name: Bootstrap the pinned Idric producer on the build host
         if: steps.compiler-cache.outputs.cache-hit != 'true'
         run: ./compiler/_/edric bootstrap
@@ -48,7 +48,7 @@ jobs:
           path: |
             compiler/_
             ~/.idris2
-          key: exporter-idric-e8b9173ab-ubuntu24-v1
+          key: exporter-idric-ff4d852862-ubuntu24-v1
       - name: Emit application callback metadata twice with retained direct DEX encoder
         env:
           PATH: ${{ github.workspace }}/compiler/_/.tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -71,12 +71,14 @@ jobs:
         with:
           packages: ''
       - run: sdkmanager "ndk;29.0.14206865"
-      - name: Compile both native payloads independently of DEX qualification
-        run: make -C android native CC_ARM64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang CC_X86_64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang
+      - name: Cross-compile existing portable capture libraries independently of DEX
+        run: make -C android native-capture CC_ARM64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang CC_X86_64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang
   webview:
     needs: direct-dex
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
+    env:
+      ASAN_OPTIONS: detect_leaks=0
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -113,6 +115,29 @@ jobs:
           packages: ''
       - name: Install build-host Android inputs
         run: sdkmanager "platforms;android-34" "build-tools;36.0.0" "ndk;29.0.14206865"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: isomorphisms/android-NDK
+          ref: b2ee19121aa3fa1112cd8338b7b6a7baca237b5f
+          path: presentation-components
+          persist-credentials: false
+      - id: ick-arm64
+        uses: isomorphisms/ai-ci/ick-android@2383379394a7af5a8808abbe2d7b159a55328a83
+        with:
+          abi: arm64-v8a
+          ndk: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+      - id: ick-x86
+        uses: isomorphisms/ai-ci/ick-android@2383379394a7af5a8808abbe2d7b159a55328a83
+        with:
+          abi: x86_64
+          ndk: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+      - name: Declare separate ICK source and NDK platform stages
+        run: >
+          echo 'ICK_ARM64=${{ steps.ick-arm64.outputs.compiler }}' >> "$GITHUB_ENV"
+      - run: echo 'ICK_X86_64=${{ steps.ick-x86.outputs.compiler }}' >> "$GITHUB_ENV"
+      - run: echo "NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+      - run: echo "GREASE=$GITHUB_WORKSPACE/grease-runtime/_bin/cxx-asan/ysh" >> "$GITHUB_ENV"
+      - run: echo "PRESENTATION_REPOSITORY=$GITHUB_WORKSPACE/presentation-components" >> "$GITHUB_ENV"
       - name: Build candidate WebView APKs and portable capture libraries without tablet claims
         run: make -C android build fixture validate native-capture DEX_DIR=${{ github.workspace }}/direct-dex DEX_SOURCE=${{ github.event.pull_request.head.sha || github.sha }} CC_ARM64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang CC_X86_64=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang BUILD_TOOLS=$ANDROID_HOME/build-tools/36.0.0 ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar KEYSTORE=${{ github.workspace }}/fixture-signer/_/build/app/wegert-debug.keystore CERT_SHA256=de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9
       - name: Prepare ephemeral emulator hardware access

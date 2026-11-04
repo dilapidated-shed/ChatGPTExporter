@@ -11,6 +11,11 @@ DEX_SOURCE ?=
 KEYSTORE ?=
 CERT_SHA256 ?=
 ANDROID_NDK ?=
+NDK ?=
+ICK_ARM64 ?=
+ICK_X86_64 ?=
+GREASE ?=
+PRESENTATION_REPOSITORY ?=
 IDRIC ?=
 IDRIC_RUNTIME_LIBRARY ?= $(dir $(IDRIC))idris2_app/libidris2_support.so
 SOURCE_COMMIT ?= $(shell git rev-parse HEAD)
@@ -67,15 +72,23 @@ verify-dex:
 	test -n "$(DEX_SOURCE)"
 	grep -qx "$(DEX_SOURCE)" "$(DEX_DIR)/source-commit.txt"
 
-build/lib/arm64-v8a/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS)
+build/lib/arm64-v8a/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS) cgw_reader.c cgw_reader.h ../native/cgw_presentation.c ../native/cgw_presentation.h build-reader.grease
 	test -x "$(CC_ARM64)"
 	mkdir -p build/lib/arm64-v8a
-	"$(CC_ARM64)" $(FLAGS) $(NATIVE) -llog -o $@
+	"$(GREASE)" build-reader.grease "$(ICK_ARM64)" "$(NDK)" arm64-v8a "$(abspath ..)" "$(PRESENTATION_REPOSITORY)" "$(abspath build/reader/arm64-v8a)"
+	"$(CC_ARM64)" $(FLAGS) $(NATIVE) build/reader/arm64-v8a/cgw_presentation.o build/reader/arm64-v8a/cgw_reader.o -llog -landroid -o $@
 
-build/fixture/lib/x86_64/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS)
+build/fixture/lib/x86_64/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS) cgw_reader.c cgw_reader.h ../native/cgw_presentation.c ../native/cgw_presentation.h build-reader.grease
 	test -x "$(CC_X86_64)"
 	mkdir -p build/fixture/lib/x86_64
-	"$(CC_X86_64)" $(FLAGS) -DCGW_WEBVIEW_SYNTHETIC $(NATIVE) -llog -o $@
+	"$(GREASE)" build-reader.grease "$(ICK_X86_64)" "$(NDK)" x86_64 "$(abspath ..)" "$(PRESENTATION_REPOSITORY)" "$(abspath build/reader/x86_64)"
+	"$(CC_X86_64)" $(FLAGS) -DCGW_WEBVIEW_SYNTHETIC $(NATIVE) build/reader/x86_64/cgw_presentation.o build/reader/x86_64/cgw_reader.o -llog -landroid -o $@
+
+# The production x86 payload has no synthetic transport. It is installed over
+# the fixture with the same package/signer/UID for independent offline reading.
+build/production/lib/x86_64/libcgw_webview.so: $(NATIVE) cgw_capture_android.inc $(CAPTURE_HEADERS) build/fixture/lib/x86_64/libcgw_webview.so
+	mkdir -p build/production/lib/x86_64
+	"$(CC_X86_64)" $(FLAGS) $(NATIVE) build/reader/x86_64/cgw_presentation.o build/reader/x86_64/cgw_reader.o -llog -landroid -o $@
 
 build/arm64-unsigned.apk: build/lib/arm64-v8a/libcgw_webview.so AndroidManifest.xml assets/bridge.js
 	test -f "$(DEX_DIR)/classes.dex"

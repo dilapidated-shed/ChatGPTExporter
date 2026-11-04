@@ -1,0 +1,38 @@
+#!/usr/bin/env grease
+set -eu -o pipefail
+if (len(ARGV) !== 6) { echo 'requires ICK NDK ABI REPOSITORY PRESENTATION_REPOSITORY NEW_OUTPUT' >&2; exit 2 }
+var compiler = ARGV[0]
+var ndk = ARGV[1]
+var abi = ARGV[2]
+var repository = ARGV[3]
+var shared = ARGV[4]
+var output = ARGV[5]
+var target = 'aarch64-linux-android'
+var expected = 'aarch64-linux-gnu'
+var flags = ['-ffixed-x18']
+if (abi === 'x86_64') {
+  setvar target = 'x86_64-linux-android'
+  setvar expected = 'x86_64-linux-gnu'
+  setvar flags = ['-march=x86-64-v2', '-mno-avx', '-mno-movbe']
+} elif (abi !== 'arm64-v8a') { echo 'unsupported reader ABI' >&2; exit 2 }
+test -x "$compiler"
+test $("$compiler" -dumpmachine) = "$expected"
+test $(git -C "$shared" rev-parse HEAD) = b2ee19121aa3fa1112cd8338b7b6a7baca237b5f
+var host = "$ndk/toolchains/llvm/prebuilt/linux-x86_64"
+var sysroot = "$host/sysroot"
+var builtin = $("$compiler" -print-file-name=include)
+test -s "$builtin/stddef.h"
+mkdir -p "$output"
+for name in cgw_presentation cgw_reader {
+  var source = "$repository/native/$name.c"
+  if (name === 'cgw_reader') { setvar source = "$repository/android/$name.c" }
+  "$compiler" "--sysroot=$sysroot" -nostdinc -isystem "$builtin" \
+    -isystem "$sysroot/usr/include" -isystem "$sysroot/usr/include/$target" \
+    -std=c11 -O2 -Wall -Wextra -Werror -fPIC -D__ANDROID__ -D__ANDROID_API__=26 \
+    -D__ANDROID_MIN_SDK_VERSION__=26 -DBIONIC_IOCTL_NO_SIGNEDNESS_OVERLOAD \
+    "-I$repository/native" "-I$repository/android" "-I$shared" @flags -S "$source" -o "$output/$name.s"
+  "$host/bin/${target}26-clang" -fPIC -c "$output/$name.s" -o "$output/$name.o"
+}
+sha256sum "$compiler" "$repository/native/cgw_presentation.c" "$repository/android/cgw_reader.c" \
+  "$shared/native/presentation/material.h" "$output/cgw_presentation.o" "$output/cgw_reader.o" > "$output/source-stage.sha256"
+printf 'source_frontend\tICK\nassembly_and_link\tNDK\nabi\t%s\nAndroid_execution\tNOT_RUN\n' "$abi" > "$output/source-stage.tsv"

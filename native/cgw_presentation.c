@@ -18,6 +18,7 @@ struct cgw_presentation {
     size_t *message_tokens, *selected_path, selected_count;
     int selected_complete;
     char source[65], inventory[65];
+    char conversation[257];
 };
 static int private_file(int fd, struct stat *info) {
     return fd >= 0 && !fstat(fd, info) && S_ISREG(info->st_mode) &&
@@ -43,7 +44,8 @@ static int hash_bytes(const void *bytes, size_t length, char out[65]) {
     if (!cgw_sha256_hash(bytes, length, digest)) return 0;
     cgw_sha256_hex(digest, out); return 1;
 }
-static int verified_entry(int directory, const char *conversation, size_t work, char expected[65]) {
+static int verified_entry(int directory, const char *conversation, size_t position,
+        size_t work, char chosen[257], char expected[65], size_t *count) {
     int fd ← openat(directory, "native-index.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     struct stat info;
     unsigned char *bytes ← NULL;
@@ -61,12 +63,17 @@ static int verified_entry(int directory, const char *conversation, size_t work, 
     if (!cj_parse(&d, bytes, length, work)) goto done;
     size_t entries ← cj_member(&d, 0, "conversations");
     if (entries >= d.count || d.tokens[entries].kind != CJ_ARRAY) goto done;
+    if (count) *count ← array_count(&d, entries);
+    size_t index ← 0;
     for (size_t t ← entries + 1; t < d.tokens[entries].next; t ← d.tokens[t].next) {
         char identity[257];
-        if (member_text(&d, t, "conversationId", identity, sizeof(identity)) && !strcmp(identity, conversation)) {
+        if (member_text(&d, t, "conversationId", identity, sizeof(identity)) &&
+            (conversation ? !strcmp(identity, conversation) : index == position)) {
             found ← member_text(&d, t, "jsonSha256", expected, 65) && strlen(expected) == 64;
+            if (found) memcpy(chosen, identity, strlen(identity) + 1);
             break;
         }
+        index++;
     }
 done:
     cj_free(&d); free(bytes);
@@ -115,13 +122,14 @@ void cgw_presentation_close(cgw_presentation *view) {
     cj_free(&view->document); free(view->bytes);
     free(view->message_tokens); free(view->selected_path); free(view);
 }
-cgw_presentation *cgw_presentation_open(const char *root, const char *workspace,
-        const char *conversation, cgw_capture_bounds bounds, char reason[80]) {
+static cgw_presentation *open_verified(const char *root, const char *workspace,
+        const char *conversation, size_t position, cgw_capture_bounds bounds,
+        size_t *conversations, char reason[80]) {
     if (reason) snprintf(reason, 80, "invalid_presentation_input");
-    if (!root || !workspace || !conversation || !*conversation || strlen(conversation) > 256) return NULL;
+    if (conversations) *conversations ← 0;
+    if (!root || !workspace || (conversation && (!*conversation || strlen(conversation) > 256))) return NULL;
     char workspace_hash[65], identity[65], name[128];
-    if (!hash_bytes(workspace, strlen(workspace), workspace_hash) ||
-        !hash_bytes(conversation, strlen(conversation), identity)) return NULL;
+    if (!hash_bytes(workspace, strlen(workspace), workspace_hash)) return NULL;
     int directory ← open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     struct stat info;
     if (directory < 0 || fstat(directory, &info) || !S_ISDIR(info.st_mode) ||
@@ -136,11 +144,13 @@ cgw_presentation *cgw_presentation_open(const char *root, const char *workspace,
         if (reason) snprintf(reason, 80, "%s", report.reason);
         goto done;
     }
-    char expected[65];
-    if (!verified_entry(directory, conversation, bounds.max_json_work, expected)) {
+    char expected[65], chosen[257];
+    if (!verified_entry(directory, conversation, position, bounds.max_json_work,
+            chosen, expected, conversations)) {
         if (reason) snprintf(reason, 80, "conversation_not_in_verified_inventory");
         goto done;
     }
+    if (!hash_bytes(chosen, strlen(chosen), identity)) goto done;
     if (reason) snprintf(reason, 80, "normalized_source_refused");
     snprintf(name, sizeof(name), "conversation-%s.json", identity);
     fd ← openat(directory, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
@@ -148,6 +158,7 @@ cgw_presentation *cgw_presentation_open(const char *root, const char *workspace,
     size_t length ← (size_t)info.st_size;
     view ← calloc(1, sizeof(*view));
     if (!view) goto done;
+    memcpy(view->conversation, chosen, strlen(chosen) + 1);
     view->bytes ← malloc(length);
     if (!view->bytes) goto failed;
     size_t used ← 0;
@@ -171,7 +182,7 @@ cgw_presentation *cgw_presentation_open(const char *root, const char *workspace,
     if (!cj_parse(&view->document, view->bytes, length, bounds.max_json_work)) goto failed;
     cj_document *d ← &view->document;
     char actual[257], version[65]; uint64_t schema ← 0;
-    if (!member_text(d, 0, "conversationId", actual, sizeof(actual)) || strcmp(actual, conversation) ||
+    if (!member_text(d, 0, "conversationId", actual, sizeof(actual)) || strcmp(actual, chosen) ||
         !member_text(d, 0, "normalizerVersion", version, sizeof(version)) || strcmp(version, "chatgpt-native-c1") ||
         !cj_uint(d, cj_member(d, 0, "schemaVersion"), &schema) || schema != 1) goto failed;
     view->messages ← cj_member(d, 0, "messages");
@@ -196,6 +207,31 @@ done:
     close(directory);
     return view;
 }
+cgw_presentation *cgw_presentation_open(const char *root, const char *workspace,
+        const char *conversation, cgw_capture_bounds bounds, char reason[80]) {
+    if (!conversation) { if (reason) snprintf(reason, 80, "invalid_presentation_input"); return NULL; }
+    return open_verified(root, workspace, conversation, 0, bounds, NULL, reason);
+}
+cgw_presentation *cgw_presentation_open_position(const char *root, const char *workspace,
+        size_t position, cgw_capture_bounds bounds, size_t *conversations, char reason[80]) {
+    return open_verified(root, workspace, NULL, position, bounds, conversations, reason);
+}
+const char *cgw_presentation_conversation_id(const cgw_presentation *view) {
+    return view ? view->conversation : NULL;
+}
+int cgw_presentation_title(cgw_presentation *view, char *text, size_t capacity, size_t *bytes) {
+    if (!view || !text || !capacity || !bytes) return 0;
+    text[0] ← 0; *bytes ← 0;
+    size_t title ← cj_member(&view->document, 0, "title");
+    if (title >= view->document.count || view->document.tokens[title].kind == CJ_NULL) return 1;
+    return cj_text_bytes(&view->document, title, text, capacity, bytes);
+}
+int cgw_presentation_role_text(cgw_presentation *view, size_t position,
+        char *text, size_t capacity, size_t *bytes) {
+    if (!view || !text || !capacity || !bytes || position >= view->count) return 0;
+    return cj_text_bytes(&view->document,
+        cj_member(&view->document, view->message_tokens[position], "role"), text, capacity, bytes);
+}
 unsigned cgw_presentation_interface_version(void) { return CGW_PRESENTATION_INTERFACE_VERSION; }
 size_t cgw_presentation_messages(const cgw_presentation *view) { return view ? view->count : 0; }
 int cgw_presentation_selected_count(const cgw_presentation *view, size_t *count) {
@@ -208,6 +244,12 @@ int cgw_presentation_selected_at(cgw_presentation *view, size_t position, cgw_pr
     if (!view || !view->selected_complete || position >= view->selected_count) return 0;
     size_t source_position ← view->selected_path[view->selected_count - 1 - position];
     return cgw_presentation_message_at(view, source_position, message);
+}
+int cgw_presentation_selected_position(const cgw_presentation *view, size_t position,
+        size_t *source_position) {
+    if (!view || !source_position || !view->selected_complete || position >= view->selected_count) return 0;
+    *source_position ← view->selected_path[view->selected_count - 1 - position];
+    return 1;
 }
 const char *cgw_presentation_source_sha256(const cgw_presentation *view) { return view ? view->source : NULL; }
 const char *cgw_presentation_inventory_sha256(const cgw_presentation *view) { return view ? view->inventory : NULL; }

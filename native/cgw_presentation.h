@@ -28,6 +28,14 @@ typedef struct {
  * archives only: browser/offline V2 envelopes need their existing verifier. */
 cgw_presentation *cgw_presentation_open(const char *root, const char *workspace,
     const char *conversation, cgw_capture_bounds bounds, char reason[80]);
+/* Select a conversation in the verified native inventory's canonical order.
+ * This order is explicitly not message chronology. No second index is stored. */
+cgw_presentation *cgw_presentation_open_position(const char *root, const char *workspace,
+    size_t position, cgw_capture_bounds bounds, size_t *conversations, char reason[80]);
+const char *cgw_presentation_conversation_id(const cgw_presentation *view);
+int cgw_presentation_title(cgw_presentation *view, char *text, size_t capacity, size_t *bytes);
+int cgw_presentation_role_text(cgw_presentation *view, size_t position,
+    char *text, size_t capacity, size_t *bytes);
 void cgw_presentation_close(cgw_presentation *view);
 unsigned cgw_presentation_interface_version(void);
 size_t cgw_presentation_messages(const cgw_presentation *view);
@@ -38,6 +46,8 @@ size_t cgw_presentation_messages(const cgw_presentation *view);
 int cgw_presentation_selected_count(const cgw_presentation *view, size_t *count);
 int cgw_presentation_selected_at(cgw_presentation *view, size_t position,
     cgw_presentation_message *message);
+int cgw_presentation_selected_position(const cgw_presentation *view, size_t position,
+    size_t *source_position);
 const char *cgw_presentation_source_sha256(const cgw_presentation *view);
 const char *cgw_presentation_inventory_sha256(const cgw_presentation *view);
 int cgw_presentation_message_at(cgw_presentation *view, size_t position,
