@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <limits.h>
+#include <linux/limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,7 +72,7 @@ static void signal_ready(ReaderWork *w) {
 static void *read_work(void *argument) {
     ReaderWork *w ← argument;
     JNIEnv *e ← NULL;
-    int attached ← (*w->vm)->AttachCurrentThread(w->vm, (void **)&e, NULL) == JNI_OK;
+    int attached ← (*w->vm)->AttachCurrentThread(w->vm, &e, NULL) == JNI_OK;
     cgw_presentation *view ← NULL;
     size_t conversation ← 0, conversations ← 0, message ← 0, part ← 0;
     int all ← 0, page ← 0;
@@ -256,6 +257,9 @@ int cgw_reader_click(JNIEnv *e, jobject view) {
     if (!reader.work) return 0;
     jint id ← (*e)->CallIntMethod(e, view, m3_method(e, view, "getId", "()I"));
     if (id < CONTROL_FIRST || id > CONTROL_LAST) return 0;
+    /* An integer ID is not a capability. A retired Activity/control or a
+     * forged same-ID View must not operate the current archive snapshot. */
+    if (!(*e)->IsSameObject(e, view, reader.controls[id - CONTROL_FIRST])) return 0;
     if (id == 1008) return -1;
     /* Copy uses Android's ordinary selectable TextView action mode. No custom
      * clipboard persistence or app-generated source text replaces selection. */

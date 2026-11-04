@@ -769,7 +769,7 @@ JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onDestroy
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onBackPressed
 (JNIEnv *e, jobject s) { pthread_mutex_lock(&platform_mutex); on_back(e,s); pthread_mutex_unlock(&platform_mutex); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onClick
-(JNIEnv *e, jobject s, jobject v) { (void)s; if (cgw_reader_click(e,v) == -1) reader_close(e); }
+(JNIEnv *e, jobject s, jobject v) { if (activity && (*e)->IsSameObject(e,s,activity) && cgw_reader_click(e,v) == -1) reader_close(e); }
 JNIEXPORT jboolean JNICALL Java_org_isomorphisms_webview_BridgeActivity_onCreateOptionsMenu
 (JNIEnv *e, jobject s, jobject m) { return create_menu(e,s,m); }
 JNIEXPORT jboolean JNICALL Java_org_isomorphisms_webview_BridgeActivity_onOptionsItemSelected
