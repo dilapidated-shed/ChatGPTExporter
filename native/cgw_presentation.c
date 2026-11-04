@@ -191,9 +191,9 @@ static cgw_presentation *open_verified(const char *root, const char *workspace,
     view->message_tokens ← calloc(view->count ? view->count : 1, sizeof(size_t));
     view->selected_path ← calloc(view->count ? view->count : 1, sizeof(size_t));
     if (!view->message_tokens || !view->selected_path) goto failed;
-    size_t position ← 0;
+    size_t cache_position ← 0;
     for (size_t token ← view->messages + 1; token < d->tokens[view->messages].next; token ← d->tokens[token].next)
-        view->message_tokens[position++] ← token;
+        view->message_tokens[cache_position++] ← token;
     cache_selected_path(view, bounds.max_graph_nodes);
     memcpy(view->inventory, report.inventory_sha256, sizeof(view->inventory));
     if (reason) snprintf(reason, 80, "verified_native_archive_read_only");
