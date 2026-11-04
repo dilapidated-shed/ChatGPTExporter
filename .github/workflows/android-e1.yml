@@ -149,8 +149,8 @@ jobs:
           "$RUNNER_TEMP/reader-compiler-inputs"
       - name: Declare separate ICK source and NDK platform stages
         run: >
-          echo "ICK_ARM64=$RUNNER_TEMP/reader-compiler-inputs/arm64-v8a/bin/gcc" >> "$GITHUB_ENV"
-      - run: echo "ICK_X86_64=$RUNNER_TEMP/reader-compiler-inputs/x86_64/bin/gcc" >> "$GITHUB_ENV"
+          echo "ICK_ARM64=$RUNNER_TEMP/reader-compiler-inputs/arm64-v8a/bin/aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+      - run: echo "ICK_X86_64=$RUNNER_TEMP/reader-compiler-inputs/x86_64/bin/x86_64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - run: echo "NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
       - run: echo "GREASE=$GITHUB_WORKSPACE/grease-runtime/_bin/cxx-asan/ysh" >> "$GITHUB_ENV"
       - run: echo "PRESENTATION_REPOSITORY=$GITHUB_WORKSPACE/presentation-components" >> "$GITHUB_ENV"

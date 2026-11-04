@@ -9,7 +9,7 @@ if (abi === 'x86_64') { setvar expected = 'x86_64-linux-gnu' } elif (abi !== 'ar
 var temporary = ENV.RUNNER_TEMP
 test -n "$temporary"
 test $(realpath "$temporary") = "$temporary"
-test "$compiler" = "$temporary/ick-android-$abi-stage/bin/gcc"
+test "$compiler" = "$temporary/ick-android-$abi-stage/bin/$expected-gcc"
 test -x "$compiler"
 test $("$compiler" -dumpmachine) = "$expected"
 var frontend = $("$compiler" -print-prog-name=cc1)
