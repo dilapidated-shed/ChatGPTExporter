@@ -80,6 +80,30 @@ static jobject construct(JNIEnv *env, const char *name)
     return object;
 }
 
+static int read_saved_entry(JNIEnv *env, jobject intent)
+{
+    jmethodID get = method(env, intent, "getAction", "()Ljava/lang/String;");
+    jstring action = get ? (*env)->CallObjectMethod(env, intent, get) : NULL;
+    const char *value = action ? (*env)->GetStringUTFChars(env, action, NULL) : NULL;
+    int result = value && !strcmp(value, "org.isomorphisms.chatgptexporter.READ_SAVED");
+    if (value) (*env)->ReleaseStringUTFChars(env, action, value);
+    if (action) (*env)->DeleteLocalRef(env, action);
+    return result;
+}
+
+static void remember_entry(JNIEnv *env, jobject self, const char *action)
+{
+    jmethodID get = method(env, self, "getIntent", "()Landroid/content/Intent;");
+    jobject intent = get ? (*env)->CallObjectMethod(env, self, get) : NULL;
+    jmethodID set_action = method(env, intent, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
+    jstring value = (*env)->NewStringUTF(env, action);
+    if (set_action && value) (*env)->CallObjectMethod(env, intent, set_action, value);
+    jmethodID set = method(env, self, "setIntent", "(Landroid/content/Intent;)V");
+    if (intent && set) (*env)->CallVoidMethod(env, self, set, intent);
+    if (value) (*env)->DeleteLocalRef(env, value);
+    if (intent) (*env)->DeleteLocalRef(env, intent);
+}
+
 static int entropy(void *context, unsigned char *bytes, size_t length)
 {
     (void)context;
@@ -538,6 +562,7 @@ static jboolean select_menu(JNIEnv *env, jobject self, jobject item)
         if (capture_running) show_status(env, "Finish the archive operation before reading saved content");
         else if (!cgw_reader_open(env, activity, archive_root, selected_workspace, android_bounds()))
             show_status(env, "Saved archive reader unavailable");
+        else remember_entry(env, activity, "org.isomorphisms.chatgptexporter.READ_SAVED");
         return JNI_TRUE;
     }
     return JNI_FALSE;
@@ -614,11 +639,7 @@ static void on_create(JNIEnv *env, jobject self, jobject bundle)
     activity = (*env)->NewGlobalRef(env, self);
     jmethodID get_intent_action = method(env, self, "getIntent", "()Landroid/content/Intent;");
     jobject entry = get_intent_action ? (*env)->CallObjectMethod(env, self, get_intent_action) : NULL;
-    jmethodID get_action = method(env, entry, "getAction", "()Ljava/lang/String;");
-    jstring entry_action = get_action ? (*env)->CallObjectMethod(env, entry, get_action) : NULL;
-    const char *action_text = entry_action ? (*env)->GetStringUTFChars(env, entry_action, NULL) : NULL;
-    int read_saved = action_text && !strcmp(action_text, "org.isomorphisms.chatgptexporter.READ_SAVED");
-    if (action_text) (*env)->ReleaseStringUTFChars(env, entry_action, action_text);
+    int read_saved = read_saved_entry(env, entry);
     if (read_saved) {
         /* The read-only entry restores only existing private archive selection.
          * It constructs neither WebView nor bridge, and cannot acquire/send. */
@@ -672,6 +693,25 @@ static void on_create(JNIEnv *env, jobject self, jobject bundle)
     if (!(*env)->ExceptionCheck(env)) report("shell:interactive_sign_in_ready");
 }
 
+static void on_new_intent(JNIEnv *env, jobject self, jobject intent)
+{
+    jclass base = (*env)->FindClass(env, "android/app/Activity");
+    jmethodID super = base ? (*env)->GetMethodID(env, base, "onNewIntent", "(Landroid/content/Intent;)V") : NULL;
+    if (!super) return;
+    (*env)->CallNonvirtualVoidMethod(env, self, base, super, intent);
+    if ((*env)->ExceptionCheck(env) || !read_saved_entry(env, intent)) return;
+    if (!cgw_reader_active()) {
+        if (capture_running) { show_status(env, "Finish the archive operation before reading saved content"); return; }
+        if (!cgw_reader_open(env, self, archive_root, selected_workspace, android_bounds())) {
+            show_status(env, "Saved archive reader unavailable"); return;
+        }
+    }
+    /* singleTask delivers a hot import as onNewIntent, not onCreate. Retain
+     * its read-only entry for recreation; do not create/reload acquisition. */
+    jmethodID set = method(env, self, "setIntent", "(Landroid/content/Intent;)V");
+    if (set) (*env)->CallVoidMethod(env, self, set, intent);
+}
+
 static void on_destroy(JNIEnv *env, jobject self)
 {
     if (activity && (*env)->IsSameObject(env, activity, self)) {
@@ -707,6 +747,7 @@ static void reader_close(JNIEnv *env)
 {
     cgw_reader_close(env);
     if (capture_root) {
+        remember_entry(env, activity, "android.intent.action.MAIN");
         jmethodID content = method(env, activity, "setContentView", "(Landroid/view/View;)V");
         if (content) (*env)->CallVoidMethod(env, activity, content, capture_root);
         jmethodID invalidate = method(env, activity, "invalidateOptionsMenu", "()V");
@@ -721,6 +762,8 @@ static void reader_close(JNIEnv *env)
  * classes recursively while Activity.<clinit> is loading this library. */
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onCreate
 (JNIEnv *e, jobject s, jobject b) { on_create(e,s,b); }
+JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onNewIntent
+(JNIEnv *e, jobject s, jobject i) { pthread_mutex_lock(&platform_mutex); on_new_intent(e,s,i); pthread_mutex_unlock(&platform_mutex); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onDestroy
 (JNIEnv *e, jobject s) { archive_shutdown(e); on_destroy(e,s); }
 JNIEXPORT void JNICALL Java_org_isomorphisms_webview_BridgeActivity_onBackPressed

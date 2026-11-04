@@ -23,6 +23,7 @@ main = do
   result ← Framework.write_framework_classes_implementing
     [(Framework.Subclass "Lorg/isomorphisms/webview/BridgeActivity;" "Landroid/app/Activity;" (Just "cgw_webview")
       [ Framework.Callback "onCreate" "V" ["Landroid/os/Bundle;"]
+      , Framework.Callback "onNewIntent" "V" ["Landroid/content/Intent;"]
       , Framework.Callback "onDestroy" "V" []
       , Framework.Callback "onBackPressed" "V" []
       , Framework.Callback "onClick" "V" ["Landroid/view/View;"]

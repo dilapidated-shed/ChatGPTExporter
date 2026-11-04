@@ -76,7 +76,7 @@ jobs:
   webview:
     needs: direct-dex
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       ASAN_OPTIONS: detect_leaks=0
     steps:
@@ -137,11 +137,29 @@ jobs:
         with:
           abi: arm64-v8a
           ndk: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+      - name: Retain qualified ARM64 compiler before application or second-ABI failure
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/ick-android-arm64-v8a-stage
+          key: ick-android-v3-gnu-property-${{ runner.os }}-${{ runner.arch }}-arm64-v8a-fbe86e23d55cfec2000c08e61deea2a407fd7175
+      - name: Verify retained ARM64 stage and reclaim only its disposable build
+        run: >
+          grease-runtime/_bin/cxx-asan/ysh android/retain-reader-compiler.grease
+          "$GITHUB_WORKSPACE" arm64-v8a "${{ steps.ick-arm64.outputs.compiler }}"
       - id: ick-x86
         uses: isomorphisms/ai-ci/ick-android@2383379394a7af5a8808abbe2d7b159a55328a83
         with:
           abi: x86_64
           ndk: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+      - name: Retain qualified x86 compiler before application failure
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/ick-android-x86_64-stage
+          key: ick-android-v3-gnu-property-${{ runner.os }}-${{ runner.arch }}-x86_64-fbe86e23d55cfec2000c08e61deea2a407fd7175
+      - name: Verify retained x86 stage and reclaim only its disposable build
+        run: >
+          grease-runtime/_bin/cxx-asan/ysh android/retain-reader-compiler.grease
+          "$GITHUB_WORKSPACE" x86_64 "${{ steps.ick-x86.outputs.compiler }}"
       - name: Declare separate ICK source and NDK platform stages
         run: >
           echo 'ICK_ARM64=${{ steps.ick-arm64.outputs.compiler }}' >> "$GITHUB_ENV"
