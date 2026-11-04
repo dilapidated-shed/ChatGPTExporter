@@ -328,6 +328,12 @@ int cgw_reader_open(JNIEnv *e, jobject activity, const char *root,
             int i ← row * 2 + slot;
             jobject button ← m3_button(e, activity, activity, theme, CONTROL_FIRST + i, labels[i], i == 1);
             m3_add(e, line, button, 0, -2, 1.0f);
+            jobject params ← (*e)->CallObjectMethod(e, button,
+                m3_method(e, button, "getLayoutParams", "()Landroid/view/ViewGroup$LayoutParams;"));
+            (*e)->CallVoidMethod(e, params, m3_method(e, params, "setMargins", "(IIII)V"),
+                m3_dp(theme, 4), m3_dp(theme, 4), m3_dp(theme, 4), m3_dp(theme, 4));
+            (*e)->CallVoidMethod(e, button, m3_method(e, button, "setLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)V"), params);
+            (*e)->DeleteLocalRef(e, params);
             reader.controls[i] ← (*e)->NewGlobalRef(e, button);
             if (i != 7) m3_enabled(e, button, 0);
         }

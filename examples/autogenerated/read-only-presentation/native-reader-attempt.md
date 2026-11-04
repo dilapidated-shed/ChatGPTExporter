@@ -57,3 +57,16 @@ capture root only on explicit Close/Back. This is durable archive recovery,
 not restoration of a destroyed live WebView or a prior viewport. Existing
 256-byte workspace-selection initialization still belongs to the legacy
 platform lifecycle; full removal of synchronous lifecycle storage is unqualified.
+
+First functioning native build4aec passed reproducible ARM64 packaging and
+actual API34 production-code viewing, source/role/branch/copy/compositor,
+offline reopening, unchanged archive and corrupt normalized-source refusal.
+At b2ef2af6 the stronger signed control-guard mutant exposed a main-thread
+observer assertion escaping Instrumentation's result handler. Its crash was
+not accepted as a negative pass. Independent ai-ci6cfacc59 relays the original
+Throwable and verifies actual disk-derived source/inventory hashes. Run
+41790878034 passes both API29 and API34 on unchanged b2 APKs, including the
+precisely rejected actual signed mutant and corrupt-source case. The producer
+now consumes that qualified observer. Footer controls gain an8dp gap so their
+rounded surfaces and shadows do not collide. These new build bytes still need
+their own source-bound qualification; no previous APK is relabelled.
