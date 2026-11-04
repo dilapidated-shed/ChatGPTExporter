@@ -39,3 +39,21 @@ There is no spelling translation, Java/Kotlin/Compose/Gradle fallback.
 Current attempt: source and checked callback integration authored; compilation,
 real ART, independent negative controls, signed candidate and physical input
 remain pending. Do not infer these from host projection acceptance.
+
+Continuation: the C1 host/navigation/original-role checks and actual checked
+Activity listener declaration compile. The first cold Android compiler jobs
+spend their time rebuilding qualified ICK stages already available to IB.
+The retained cold-build helper `android/retain-reader-compiler.grease` is a
+deferred build path, not a production dependency. The selected build restores
+IB's exact source-bound ai-ci82cc compiler artifacts for fbe86 ICK, verifies
+their ZIP digests and source receipts, then runs the current independent NDK29
+glyph/Bionic/atomics/complex/branch-protection/API25 rejection suite before
+compiling application C. A previous NDK27 qualification is not relabelled NDK29.
+No different compiler or source-spelling fallback is selected.
+
+The explicit read-only entry also handles singleTask onNewIntent and retains
+that entry across recreation. A reader opened from capture restores the actual
+capture root only on explicit Close/Back. This is durable archive recovery,
+not restoration of a destroyed live WebView or a prior viewport. Existing
+256-byte workspace-selection initialization still belongs to the legacy
+platform lifecycle; full removal of synchronous lifecycle storage is unqualified.

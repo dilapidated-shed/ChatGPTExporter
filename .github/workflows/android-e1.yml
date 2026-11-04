@@ -132,38 +132,25 @@ jobs:
           ref: b2ee19121aa3fa1112cd8338b7b6a7baca237b5f
           path: presentation-components
           persist-credentials: false
-      - id: ick-arm64
-        uses: isomorphisms/ai-ci/ick-android@2383379394a7af5a8808abbe2d7b159a55328a83
+      - name: Exact ICK qualification sources for reused compiler stages
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          abi: arm64-v8a
-          ndk: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
-      - name: Retain qualified ARM64 compiler before application or second-ABI failure
-        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
-        with:
-          path: ${{ runner.temp }}/ick-android-arm64-v8a-stage
-          key: ick-android-v3-gnu-property-${{ runner.os }}-${{ runner.arch }}-arm64-v8a-fbe86e23d55cfec2000c08e61deea2a407fd7175
-      - name: Verify retained ARM64 stage and reclaim only its disposable build
+          repository: dilapidated-shed/ick
+          ref: fbe86e23d55cfec2000c08e61deea2a407fd7175
+          path: reader-compiler-source
+          persist-credentials: false
+      - name: Restore IB's exact compiler checkpoints and independently requalify NDK29
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: >
-          grease-runtime/_bin/cxx-asan/ysh android/retain-reader-compiler.grease
-          "$GITHUB_WORKSPACE" arm64-v8a "${{ steps.ick-arm64.outputs.compiler }}"
-      - id: ick-x86
-        uses: isomorphisms/ai-ci/ick-android@2383379394a7af5a8808abbe2d7b159a55328a83
-        with:
-          abi: x86_64
-          ndk: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
-      - name: Retain qualified x86 compiler before application failure
-        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
-        with:
-          path: ${{ runner.temp }}/ick-android-x86_64-stage
-          key: ick-android-v3-gnu-property-${{ runner.os }}-${{ runner.arch }}-x86_64-fbe86e23d55cfec2000c08e61deea2a407fd7175
-      - name: Verify retained x86 stage and reclaim only its disposable build
-        run: >
-          grease-runtime/_bin/cxx-asan/ysh android/retain-reader-compiler.grease
-          "$GITHUB_WORKSPACE" x86_64 "${{ steps.ick-x86.outputs.compiler }}"
+          grease-runtime/_bin/cxx-asan/ysh android/fetch-reader-compilers.grease
+          "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/independent-archive-ui"
+          "$GITHUB_WORKSPACE/reader-compiler-source" "$ANDROID_HOME/ndk/29.0.14206865"
+          "$RUNNER_TEMP/reader-compiler-inputs"
       - name: Declare separate ICK source and NDK platform stages
         run: >
-          echo 'ICK_ARM64=${{ steps.ick-arm64.outputs.compiler }}' >> "$GITHUB_ENV"
-      - run: echo 'ICK_X86_64=${{ steps.ick-x86.outputs.compiler }}' >> "$GITHUB_ENV"
+          echo "ICK_ARM64=$RUNNER_TEMP/reader-compiler-inputs/arm64-v8a/bin/gcc" >> "$GITHUB_ENV"
+      - run: echo "ICK_X86_64=$RUNNER_TEMP/reader-compiler-inputs/x86_64/bin/gcc" >> "$GITHUB_ENV"
       - run: echo "NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
       - run: echo "GREASE=$GITHUB_WORKSPACE/grease-runtime/_bin/cxx-asan/ysh" >> "$GITHUB_ENV"
       - run: echo "PRESENTATION_REPOSITORY=$GITHUB_WORKSPACE/presentation-components" >> "$GITHUB_ENV"
