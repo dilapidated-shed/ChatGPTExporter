@@ -622,8 +622,10 @@ static void on_create(JNIEnv *env, jobject self, jobject bundle)
     if (read_saved) {
         /* The read-only entry restores only existing private archive selection.
          * It constructs neither WebView nor bridge, and cannot acquire/send. */
-        if (!archive_initialize(env) || !cgw_reader_open(env, self, archive_root, selected_workspace, android_bounds()))
+        if (!archive_initialize(env) || !cgw_reader_open(env, self, archive_root, selected_workspace, android_bounds())) {
             report("reader:entry_unavailable");
+            if (!(*env)->ExceptionCheck(env)) cgw_reader_unavailable(env, self);
+        }
         return;
     }
     cgw_webview_bridge_config config = { .entropy = entropy, .response_cap_bytes = 5000000 };

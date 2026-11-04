@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 /* ICK source. Existing archive verification and all decoding run on one
  * detached worker. UI delivery contains at most 2048 UTF-16 code units and
@@ -37,6 +38,9 @@ typedef struct {
     M3Theme theme;
 } ReaderUI;
 static ReaderUI reader;
+/* A closed Activity may leave bounded verification draining on its worker.
+ * Do not multiply archive snapshots/threads during rapid recreation. */
+static atomic_int verification_busy;
 
 static jstring utf8(JNIEnv *e, const unsigned char *bytes, size_t length) {
     if (length > INT_MAX) return NULL;
@@ -202,6 +206,7 @@ static void *read_work(void *argument) {
     if (attached) (*w->vm)->DetachCurrentThread(w->vm);
     close(w->pipefd[0]); close(w->pipefd[1]);
     pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w);
+    atomic_store(&verification_busy, 0);
     return NULL;
 }
 static int deliver(int fd, int events, void *unused) {
@@ -236,6 +241,17 @@ static int deliver(int fd, int events, void *unused) {
     (*e)->PopLocalFrame(e, NULL); return 1;
 }
 int cgw_reader_active(void) { return reader.work != NULL; }
+void cgw_reader_unavailable(JNIEnv *e, jobject activity) {
+    M3Theme theme ← m3_theme(e, activity);
+    jobject text ← m3_new(e, activity, "android/widget/TextView");
+    jstring label ← (*e)->NewStringUTF(e,
+        "Saved archive reader unavailable. A previous verification may still be finishing. Use Back, then reopen the saved archive.");
+    m3_text(e, text, label, theme, 16.0f);
+    (*e)->CallVoidMethod(e, text, m3_method(e, text, "setBackgroundColor", "(I)V"), theme.surface);
+    (*e)->CallVoidMethod(e, text, m3_method(e, text, "setPadding", "(IIII)V"),
+        m3_dp(theme, 16), m3_dp(theme, 16), m3_dp(theme, 16), m3_dp(theme, 16));
+    (*e)->CallVoidMethod(e, activity, m3_method(e, activity, "setContentView", "(Landroid/view/View;)V"), text);
+}
 int cgw_reader_click(JNIEnv *e, jobject view) {
     if (!reader.work) return 0;
     jint id ← (*e)->CallIntMethod(e, view, m3_method(e, view, "getId", "()I"));
@@ -276,6 +292,10 @@ int cgw_reader_open(JNIEnv *e, jobject activity, const char *root,
     ReaderWork *w ← calloc(1, sizeof(*w));
     if (!w) return 0;
     if (pipe2(w->pipefd, O_NONBLOCK | O_CLOEXEC)) { free(w); return 0; }
+    int expected ← 0;
+    if (!atomic_compare_exchange_strong(&verification_busy, &expected, 1)) {
+        close(w->pipefd[0]); close(w->pipefd[1]); free(w); return 0;
+    }
     pthread_mutex_init(&w->mutex, NULL); pthread_cond_init(&w->changed, NULL);
     snprintf(w->root, sizeof(w->root), "%s", root); snprintf(w->workspace, sizeof(w->workspace), "%s", workspace);
     w->bounds ← bounds; w->pending ← 1; w->revision ← 1;
@@ -292,7 +312,8 @@ int cgw_reader_open(JNIEnv *e, jobject activity, const char *root,
     (*e)->CallVoidMethod(e, heading, m3_method(e, heading, "setTextIsSelectable", "(Z)V"), JNI_TRUE);
     jstring loading ← (*e)->NewStringUTF(e, "Verifying saved archive offline…");
     m3_text(e, heading, loading, theme, 12.0f); m3_text(e, body, (*e)->NewStringUTF(e, ""), theme, 16.0f);
-    m3_describe(e, body, "Saved conversation content; read-only; selectable");
+    /* TextView's own text remains the accessible content; a static content
+     * description would hide the actual message from accessibility services. */
     m3_add(e, column, heading, -1, -2, 0);
     (*e)->CallVoidMethod(e, scroll, m3_method(e, scroll, "addView", "(Landroid/view/View;)V"), body);
     m3_add(e, column, scroll, -1, 0, 1.0f);
@@ -322,5 +343,6 @@ fail:
     cgw_reader_close(e);
     close(w->pipefd[0]); close(w->pipefd[1]);
     pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w);
+    atomic_store(&verification_busy, 0);
     return 0;
 }
