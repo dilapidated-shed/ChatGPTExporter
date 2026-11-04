@@ -254,7 +254,7 @@ void cgw_reader_unavailable(JNIEnv *e, jobject activity) {
     (*e)->CallVoidMethod(e, activity, m3_method(e, activity, "setContentView", "(Landroid/view/View;)V"), text);
 }
 int cgw_reader_click(JNIEnv *e, jobject view) {
-    if (!reader.work) return 0;
+    if (!reader.work || !view) return 0;
     jint id ← (*e)->CallIntMethod(e, view, m3_method(e, view, "getId", "()I"));
     if (id < CONTROL_FIRST || id > CONTROL_LAST) return 0;
     /* An integer ID is not a capability. A retired Activity/control or a

@@ -130,6 +130,26 @@ production-reader: build/production-reader-unsigned.apk
 	grep -q 'certificate SHA-256 digest: de9b1d47c5a65e6d46a204b79dd9ee566b9d3c9832ba81ebc4213d3392e92ff9' build/production-reader-signature.txt
 	sha256sum build/production-reader.apk build/production/lib/x86_64/libcgw_webview.so > build/production-reader.sha256
 
+# Independent observer must reject this actual compiled control-admission
+# mutation. It retains the real archive/controller and changes one guard only.
+build/control-mutant/lib/x86_64/libcgw_webview.so: $(NATIVE) cgw_reader.c cgw_reader.h ../native/cgw_presentation.c build-reader.grease
+	mkdir -p build/control-mutant/lib/x86_64
+	sed '/reader.controls\[id - CONTROL_FIRST\]/d' cgw_reader.c > build/control-mutant/reader.c
+	! cmp -s cgw_reader.c build/control-mutant/reader.c
+	"$(GREASE)" build-reader.grease "$(ICK_X86_64)" "$(NDK)" x86_64 "$(abspath ..)" "$(PRESENTATION_REPOSITORY)" "$(abspath build/control-mutant/stage)" "$(abspath build/control-mutant/reader.c)"
+	"$(CC_X86_64)" $(FLAGS) $(NATIVE) build/control-mutant/stage/cgw_presentation.o build/control-mutant/stage/cgw_reader.o -llog -landroid -o $@
+
+build/control-mutant-unsigned.apk: build/production-reader-unsigned.apk build/control-mutant/lib/x86_64/libcgw_webview.so
+	cp build/production-reader-unsigned.apk $@
+	cd build/control-mutant && TZ=UTC zip -X -D -q ../control-mutant-unsigned.apk lib/x86_64/libcgw_webview.so
+
+.PHONY: control-mutant
+control-mutant: build/control-mutant-unsigned.apk
+	"$(BUILD_TOOLS)/zipalign" -P 16 -f 4 build/control-mutant-unsigned.apk build/control-mutant-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" sign --ks "$(KEYSTORE)" --ks-type PKCS12 --ks-pass pass:wegert-debug --key-pass pass:wegert-debug --ks-key-alias wegert-debug --out build/control-mutant.apk build/control-mutant-aligned.apk
+	"$(BUILD_TOOLS)/apksigner" verify --verbose --print-certs build/control-mutant.apk > build/control-mutant-signature.txt
+	sha256sum build/control-mutant.apk build/control-mutant/lib/x86_64/libcgw_webview.so build/control-mutant/reader.c > build/control-mutant.sha256
+
 fixture: build/fixture-unsigned.apk
 	test -f "$(KEYSTORE)"
 	test -n "$(CERT_SHA256)"
