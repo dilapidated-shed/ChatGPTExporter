@@ -7,7 +7,7 @@ var source = ARGV[2]
 var ndk = ARGV[3]
 var output = ARGV[4]
 test ! -e "$output"
-test $(git -C "$aici" rev-parse HEAD) = 6cfacc591b5e6b187547b4409e976772f319c28b
+test $(git -C "$aici" rev-parse HEAD) = dd9f41e757add6ffcf44d17c888d3faf09d6665e
 test $(git -C "$source" rev-parse HEAD) = fbe86e23d55cfec2000c08e61deea2a407fd7175
 mkdir -p "$output/archives"
 for abi in arm64-v8a x86_64 {
