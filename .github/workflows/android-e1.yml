@@ -79,6 +79,7 @@ jobs:
     timeout-minutes: 120
     env:
       ASAN_OPTIONS: detect_leaks=0
+      CHARCOAL_GREASE: ${{ github.workspace }}/grease-runtime/_bin/cxx-asan/ysh
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -119,11 +120,11 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/ai-ci
-          ref: 6cfacc591b5e6b187547b4409e976772f319c28b
+          ref: dd9f41e757add6ffcf44d17c888d3faf09d6665e
           path: independent-archive-ui
           persist-credentials: false
       - name: Declared observer text verifier
-        run: sudo apt-get install --no-install-recommends -y ripgrep
+        run: sudo apt-get install --no-install-recommends -y ripgrep ffmpeg
       - id: ick-host
         uses: isomorphisms/ai-ci/ick-host@2383379394a7af5a8808abbe2d7b159a55328a83
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
