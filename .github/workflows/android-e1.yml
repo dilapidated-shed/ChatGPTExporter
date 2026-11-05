@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/android-NDK
-          ref: e8b67dfc67776c2b8da919785d15f38d68c91db0
+          ref: 38d6899706d855201239d86e1629e2620c0e8821
           path: callback-producer
           persist-credentials: false
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -130,7 +130,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/android-NDK
-          ref: e8b67dfc67776c2b8da919785d15f38d68c91db0
+          ref: 38d6899706d855201239d86e1629e2620c0e8821
           path: presentation-components
           persist-credentials: false
       - name: Exact ICK qualification sources for reused compiler stages
