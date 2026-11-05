@@ -3,7 +3,7 @@
   <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
   <uses-permission android:name="android.permission.INTERNET" />
   <application android:label="ChatGPT Export"
-               android:theme="@android:style/Theme.Material.Light.NoActionBar"
+               android:theme="@style/Theme.Charcoal"
                android:allowBackup="false" android:usesCleartextTraffic="false"
                android:debuggable="false">
     <activity android:name="org.isomorphisms.webview.BridgeActivity"

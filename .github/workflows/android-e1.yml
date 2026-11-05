@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/android-NDK
-          ref: b2ee19121aa3fa1112cd8338b7b6a7baca237b5f
+          ref: 38d6899706d855201239d86e1629e2620c0e8821
           path: callback-producer
           persist-credentials: false
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -79,6 +79,7 @@ jobs:
     timeout-minutes: 120
     env:
       ASAN_OPTIONS: detect_leaks=0
+      CHARCOAL_GREASE: ${{ github.workspace }}/grease-runtime/_bin/cxx-asan/ysh
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -119,17 +120,17 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/ai-ci
-          ref: 6cfacc591b5e6b187547b4409e976772f319c28b
+          ref: d71b82de2243c57ff477e169fd937b7976979888
           path: independent-archive-ui
           persist-credentials: false
       - name: Declared observer text verifier
-        run: sudo apt-get install --no-install-recommends -y ripgrep
+        run: sudo apt-get install --no-install-recommends -y ripgrep ffmpeg
       - id: ick-host
         uses: isomorphisms/ai-ci/ick-host@2383379394a7af5a8808abbe2d7b159a55328a83
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/android-NDK
-          ref: b2ee19121aa3fa1112cd8338b7b6a7baca237b5f
+          ref: 38d6899706d855201239d86e1629e2620c0e8821
           path: presentation-components
           persist-credentials: false
       - name: Exact ICK qualification sources for reused compiler stages
