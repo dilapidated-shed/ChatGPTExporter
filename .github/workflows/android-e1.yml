@@ -120,7 +120,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: isomorphisms/ai-ci
-          ref: 3e7a512fd68e299491bac8b40f2e199875b62008
+          ref: d71b82de2243c57ff477e169fd937b7976979888
           path: independent-archive-ui
           persist-credentials: false
       - name: Declared observer text verifier
